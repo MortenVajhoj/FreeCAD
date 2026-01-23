@@ -22,6 +22,7 @@
 #  **************************************************************************/
 
 import FreeCAD
+import FreeCADGui
 from FreeCAD import Units, Placement
 from UtilsMeasure import MeasureBasePython
 from PySide.QtCore import QT_TRANSLATE_NOOP
@@ -114,8 +115,18 @@ class MeasureCOM(MeasureBasePython):
 
     def parseSelection(self, obj, selection):
         item = selection[0]
-        o = item["object"]
-        obj.Element = (o, item["subName"])
+        measureObj = obj
+        clickedObj = item.get("object")
+        subName = item.get("subName", "")
+
+        if subName and ("Face" in str(subName) or "Edge" in str(subName)):
+
+            measureObj.Element = (clickedObj, "")
+            if FreeCADGui:
+                FreeCADGui.Selection.clearSelection()
+                FreeCADGui.Selection.addSelection(clickedObj)
+        else:
+            measureObj.Element = (clickedObj, subName)
 
     def getResultString(self, obj):
         values = [Units.Quantity(v, Units.Length).getUserPreferred()[0] for v in obj.Result]
@@ -129,24 +140,21 @@ class MeasureCOM(MeasureBasePython):
         ob = element[0]
         subElements = element[1]
 
-        if subElements:
+        if hasattr(ob, "Shape"):
+            shape = ob.Shape
+            if not hasattr(shape, "CenterOfMass"):
+                return
+
+            com = shape.CenterOfMass
+        elif subElements:
             subName = subElements[0]
             sub = ob.getSubObject(subName)
 
             if not sub or not hasattr(sub, "CenterOfMass"):
                 return
             com = sub.CenterOfMass
-
         else:
-            # Get Center of Mass of the object
-            if not hasattr(ob, "Shape"):
-                return
-
-            shape = ob.Shape
-            if not hasattr(shape, "CenterOfMass"):
-                return
-
-            com = shape.CenterOfMass
+            return
 
         obj.Result = com
         placement = Placement()
