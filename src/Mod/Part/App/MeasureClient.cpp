@@ -100,11 +100,31 @@ static float getRadius(TopoDS_Shape& edge)
     }
     if (edge.ShapeType() == TopAbs_FACE) {
         BRepAdaptor_Surface adapt(TopoDS::Face(edge));
-        if (adapt.GetType() != GeomAbs_Cylinder) {
-            return 0.0;
+        if (adapt.GetType() == GeomAbs_Cylinder) {
+            gp_Cylinder cylinder = adapt.Cylinder();
+            return cylinder.Radius();
         }
-        gp_Cylinder cylinder = adapt.Cylinder();
-        return cylinder.Radius();
+        if (adapt.GetType() == GeomAbs_Sphere) {
+            gp_Sphere sphere = adapt.Sphere();
+            return sphere.Radius();
+        }
+        if (adapt.GetType() == GeomAbs_Torus) {
+            gp_Torus torus = adapt.Torus();
+            return torus.MinorRadius();
+        }
+        if (adapt.GetType() == GeomAbs_Plane) {
+            TopoDS_Face face = TopoDS::Face(edge);
+            TopExp_Explorer expEdge(face, TopAbs_EDGE);
+            for (; expEdge.More(); expEdge.Next()) {
+                TopoDS_Edge e = TopoDS::Edge(expEdge.Current());
+                BRepAdaptor_Curve adaptEdge(e);
+                if (adaptEdge.GetType() == GeomAbs_Circle) {
+                    gp_Circ circle = adaptEdge.Circle();
+                    return circle.Radius();
+                }
+            }
+        }
+        return 0.0;
     }
     return 0.0;
 }
@@ -385,12 +405,35 @@ MeasureRadiusInfoPtr MeasureRadiusHandler(const App::SubObjectT& subject)
 
         BRepAdaptor_Surface surf(face);
         if (surf.GetType() == GeomAbs_Cylinder) {
-            center = surf.Cylinder().Location();
+            center = gprops.CentreOfMass();
+        }
+        else if (surf.GetType() == GeomAbs_Sphere) {
+            center = surf.Sphere().Location();
+        }
+        else if (surf.GetType() == GeomAbs_Torus) {
+            gp_Pnt torusCenter= surf.Torus().Location();
+            Standard_Real majorRadius = surf.Torus().MajorRadius();
+            gp_Vec direction(surf.Torus().Position().XDirection());
+            direction *= majorRadius;
+            center = torusCenter.Translated(direction);
+        }
+        else if (surf.GetType() == GeomAbs_Plane) {
+            TopExp_Explorer expEdge(face, TopAbs_EDGE);
+            for (; expEdge.More(); expEdge.Next()) {
+                TopoDS_Edge e = TopoDS::Edge(expEdge.Current());
+                BRepAdaptor_Curve adaptEdge(e);
+                if (adaptEdge.GetType() == GeomAbs_Circle) {
+                    gp_Circ circle = adaptEdge.Circle();
+                    center = circle.Location();
+                }
+            }
         }
     }
     // Get Center of mass as the attachment point of the label
     auto origin = gprops.CentreOfMass();
-
+    if (origin.XYZ().IsEqual(center.XYZ(), 1e-6)) {
+        origin.Translate(gp_Vec(1.0, 0.0, 0.0));
+    }
     centerPoint = Base::Vector3d(center.X(), center.Y(), center.Z());
 
     // a somewhat arbitrary radius from center -> point on curve

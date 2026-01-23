@@ -25,9 +25,11 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
+#include <TopoDS_Face.hxx>
 #include <TopoDS_Wire.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepLProp_CLProps.hxx>
+#include <TopAbs.hxx>
 
 #include <App/Application.h>
 #include <App/Document.h>
@@ -78,12 +80,38 @@ bool MeasureRadius::isValidSelection(const App::MeasureSelection& selection)
         return false;
     }
 
-    if (type != App::MeasureElementType::CIRCLE && type != App::MeasureElementType::ARC
-        && type != App::MeasureElementType::CYLINDER) {
+    if (type == App::MeasureElementType::CIRCLE || type == App::MeasureElementType::ARC
+        || type == App::MeasureElementType::CYLINDER) {
+        return true;
+    }
+
+    if (type == App::MeasureElementType::SURFACE || type == App::MeasureElementType::PLANE) {
+        auto objT = element.object;
+        TopoDS_Shape shape = Part::Feature::getShape(
+            objT.getObject(),
+            Part::ShapeOption::NeedSubElement | Part::ShapeOption::ResolveLink | Part::ShapeOption::Transform,
+            objT.getSubName().c_str()
+        );
+
+        if (shape.IsNull()) {
+            return false;
+        }
+
+        if (shape.ShapeType() == TopAbs_FACE) {
+            TopoDS_Face face = TopoDS::Face(shape);
+            for (TopExp_Explorer expEdge(face, TopAbs_EDGE); expEdge.More(); expEdge.Next()) {
+                TopoDS_Edge e = TopoDS::Edge(expEdge.Current());
+                BRepAdaptor_Curve adaptEdge(e);
+                if (adaptEdge.GetType() == GeomAbs_Circle) {
+                    return true;
+                }
+            }
+        }
+
         return false;
     }
 
-    return true;
+    return false;
 }
 
 //! return true if the selection is particularly interesting to MeasureRadius.
@@ -100,6 +128,37 @@ bool MeasureRadius::isPrioritizedSelection(const App::MeasureSelection& selectio
     if (type == App::MeasureElementType::CIRCLE || type == App::MeasureElementType::ARC
         || type == App::MeasureElementType::CYLINDER) {
         return true;
+    }
+
+    if (type == App::MeasureElementType::SURFACE || type == App::MeasureElementType::PLANE) {
+        auto objT = element.object;
+        TopoDS_Shape shape = Part::Feature::getShape(
+            objT.getObject(),
+            Part::ShapeOption::NeedSubElement | Part::ShapeOption::ResolveLink | Part::ShapeOption::Transform,
+            objT.getSubName().c_str()
+        );
+
+        if (shape.IsNull()) {
+            return false;
+        }
+
+        if (shape.ShapeType() == TopAbs_FACE) {
+            bool foundCircle = false;
+            TopoDS_Face face = TopoDS::Face(shape);
+            for (TopExp_Explorer expEdge(face, TopAbs_EDGE); expEdge.More(); expEdge.Next()) {
+                TopoDS_Edge e = TopoDS::Edge(expEdge.Current());
+                BRepAdaptor_Curve adaptEdge(e);
+                if (adaptEdge.GetType() != GeomAbs_Circle) {
+                    return false;
+                }
+                if (adaptEdge.GetType() == GeomAbs_Circle) {
+                    foundCircle = true;
+                }
+            }
+            if (foundCircle) {
+                return true;
+            }
+        }
     }
 
     return false;
