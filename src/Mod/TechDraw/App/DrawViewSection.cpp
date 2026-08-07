@@ -380,9 +380,9 @@ TopoDS_Shape DrawViewSection::getShapeToCut()
         dvp = static_cast<TechDraw::DrawViewPart*>(base);
         constexpr bool fuseBefore{true};
         constexpr bool allow2d{false};
-        shapeToCut = dvp->getSourceShape(!fuseBefore, allow2d);
+        shapeToCut = dvp->getSourceShape(!fuseBefore, allow2d).getShape();
         if (FuseBeforeCut.getValue()) {
-            shapeToCut = dvp->getSourceShape(fuseBefore);
+            shapeToCut = dvp->getSourceShape(fuseBefore).getShape();
         }
     }
     else {

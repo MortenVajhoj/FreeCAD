@@ -50,6 +50,11 @@ namespace App
 class Part;
 }
 
+namespace Part
+{
+class TopoShape;
+}
+
 namespace TechDraw
 {
 class GeometryObject;
@@ -141,7 +146,7 @@ public:
     void handleChangedPropertyType(
         Base::XMLReader &reader, const char * TypeName, App::Property * prop) override;
 
-    static TopoDS_Shape centerScaleRotate(const DrawViewPart* dvp, TopoDS_Shape& inOutShape,
+    static Part::TopoShape centerScaleRotate(const DrawViewPart* dvp, const Part::TopoShape& inShape,
                                           Base::Vector3d centroid);
 
     std::vector<TechDraw::DrawHatch*> getHatches() const;
@@ -211,7 +216,7 @@ public:
     bool newFaceFinder();
     bool isUnsetting() { return nowUnsetting; }
 
-    virtual TopoDS_Shape getSourceShape(bool fuse = false, bool allow2d = true) const;
+    virtual Part::TopoShape getSourceShape(bool fuse = false, bool allow2d = true) const;
     virtual TopoDS_Shape getShapeForDetail() const;
     std::vector<App::DocumentObject*> getAllSources() const;
 
@@ -259,10 +264,10 @@ protected:
     void onChanged(const App::Property* prop) override;
     void unsetupObject() override;
 
-    virtual TechDraw::GeometryObjectPtr buildGeometryObject(const TopoDS_Shape& shape,
+    virtual TechDraw::GeometryObjectPtr buildGeometryObject(const Part::TopoShape& shape,
                                                             const gp_Ax2& viewAxis);
-    virtual TechDraw::GeometryObjectPtr makeGeometryForShape(const TopoDS_Shape& shape);//const??
-    void partExec(TopoDS_Shape& shape);
+    virtual TechDraw::GeometryObjectPtr makeGeometryForShape(const Part::TopoShape& shape);//const??
+    void partExec(Part::TopoShape& shape);
     virtual void addPoints(void);
 
     void extractFaces();

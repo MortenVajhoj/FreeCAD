@@ -60,6 +60,7 @@
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
+#include <set>
 #include <sstream>
 
 
@@ -90,6 +91,8 @@
 #include "ShapeExtractor.h"
 #include "Preferences.h"
 #include "ShapeUtils.h"
+
+#include <Mod/Part/App/TopoShape.h>
 
 using namespace TechDraw;
 using DU = DrawUtil;
@@ -166,17 +169,15 @@ DrawViewPart::~DrawViewPart()
     removeAllReferencesFromGeom();
 }
 
-//! returns a compound of all the shapes from the DocumentObjects in the Source &
-//!  XSource property lists
-TopoDS_Shape DrawViewPart::getSourceShape(bool fuse, bool allow2d) const
+
+Part::TopoShape DrawViewPart::getSourceShape(bool fuse, bool allow2d) const
 {
-//    Base::Console().message("DVP::getSourceShape()\n");
     const std::vector<App::DocumentObject*>& links = getAllSources();
     if (links.empty()) {
         return {};
     }
     if (fuse) {
-        return ShapeExtractor::getShapesFused(links);
+        return Part::TopoShape(ShapeExtractor::getShapesFused(links));
     }
     return ShapeExtractor::getShapes(links, allow2d);
 }
@@ -186,7 +187,7 @@ TopoDS_Shape DrawViewPart::getSourceShape(bool fuse, bool allow2d) const
 //! version of the shape?  Should we have a getShapeForSection?
 TopoDS_Shape DrawViewPart::getShapeForDetail() const
 {
-    return ShapeUtils::rotateShape(getSourceShape(false), getProjectionCS(), Rotation.getValue());
+    return ShapeUtils::rotateShape(getSourceShape(false), getProjectionCS(), Rotation.getValue()).getShape();
 }
 
 //! combine the regular links and xlinks into a single list
@@ -236,8 +237,8 @@ App::DocumentObjectExecReturn* DrawViewPart::execute()
         return DrawView::execute();
     }
 
-    TopoDS_Shape shape = getSourceShape();
-    if (shape.IsNull()) {
+    Part::TopoShape shape = getSourceShape();
+    if (shape.isNull()) {
         Base::Console().message("DVP::execute - %s - Source shape is Null.\n", getNameInDocument());
         return DrawView::execute();
     }
@@ -290,7 +291,7 @@ void DrawViewPart::onChanged(const App::Property* prop)
     DrawView::onChanged(prop);
 }
 
-void DrawViewPart::partExec(TopoDS_Shape& shape)
+void DrawViewPart::partExec(Part::TopoShape& shape)
 {
     if (waitingForHlr()) {
         //finish what we are already doing before starting a new cycle
@@ -306,44 +307,41 @@ void DrawViewPart::partExec(TopoDS_Shape& shape)
     }
 }
 
-//! prepare the shape for HLR processing by centering, scaling and rotating it
-GeometryObjectPtr DrawViewPart::makeGeometryForShape(const TopoDS_Shape& shape)
+
+GeometryObjectPtr DrawViewPart::makeGeometryForShape(const Part::TopoShape& shape)
 {
     // if we use the passed reference directly, the centering doesn't work.  Maybe the underlying OCC TShape
     // isn't modified?  using a copy works and the referenced shape (from getSourceShape in execute())
     // isn't used for anything anyway.
     bool copyGeometry = true;
     bool copyMesh = false;
-    BRepBuilderAPI_Copy copier(shape, copyGeometry, copyMesh);
+    BRepBuilderAPI_Copy copier(shape.getShape(), copyGeometry, copyMesh);
     TopoDS_Shape localShape = copier.Shape();
 
     gp_Pnt gCentroid = ShapeUtils::findCentroid(localShape, getProjectionCS());
     m_saveCentroid = Base::convertTo<Base::Vector3d>(gCentroid);
-    m_saveShape = centerScaleRotate(this, localShape, m_saveCentroid);
+    m_saveShape = centerScaleRotate(this, localShape, m_saveCentroid).getShape();
 
-    return buildGeometryObject(localShape, getProjectionCS());
+    Part::TopoShape mappedShape = centerScaleRotate(this, shape, m_saveCentroid);
+
+    return buildGeometryObject(mappedShape, getProjectionCS());
 }
 
-//! Modify a shape by centering, scaling and rotating and return the centered (but not rotated) shape
-TopoDS_Shape DrawViewPart::centerScaleRotate(const DrawViewPart *dvp, TopoDS_Shape& inOutShape,
+
+Part::TopoShape DrawViewPart::centerScaleRotate(const DrawViewPart *dvp, const Part::TopoShape& inShape,
                                              Base::Vector3d centroid)
 {
     gp_Ax2 viewAxis = dvp->getProjectionCS();
 
-    //center shape on origin
-    TopoDS_Shape centeredShape = ShapeUtils::moveShape(inOutShape, centroid * -1.0);
-
-    inOutShape = ShapeUtils::scaleShape(centeredShape, dvp->getScale());
+    Part::TopoShape centeredShape = ShapeUtils::moveShape(inShape, centroid * -1.0);
+    Part::TopoShape scaledShape = ShapeUtils::scaleShape(centeredShape, dvp->getScale());
     if (!DrawUtil::fpCompare(dvp->Rotation.getValue(), 0.0)) {
-        inOutShape = ShapeUtils::rotateShape(inOutShape, viewAxis,
-                                           dvp->Rotation.getValue());//conventional rotation
+        scaledShape = ShapeUtils::rotateShape(scaledShape, viewAxis, dvp->Rotation.getValue());
     }
-    //    BRepTools::Write(inOutShape, "DVPScaled.brep");            //debug
-    return centeredShape;
+    return scaledShape;
 }
 
-//! create a geometry object and trigger the HLR process in another thread
-TechDraw::GeometryObjectPtr DrawViewPart::buildGeometryObject(const TopoDS_Shape& shape,
+TechDraw::GeometryObjectPtr DrawViewPart::buildGeometryObject(const Part::TopoShape& shape,
                                                               const gp_Ax2& viewAxis)
 {
     TechDraw::GeometryObjectPtr go(
@@ -391,6 +389,39 @@ void DrawViewPart::onHlrFinished()
 {
     //now that the new GeometryObject is fully populated, we can replace the old one
     if (m_tempGeometryObject) {
+        if (geometryObject) {
+            std::vector<TechDraw::BaseGeomPtr> currentEdges = geometryObject->getEdgeGeometry();
+            std::vector<TechDraw::BaseGeomPtr> newEdges = m_tempGeometryObject->getEdgeGeometry();
+
+            std::set<int> usedIndices;
+
+            for (auto& currentEdge : currentEdges) {
+                for (auto& newEdge : newEdges) {
+                    if (m_tempGeometryObject->isSameElement(
+                            newEdge->getMappedName(), newEdge->getSegmentNumber(),
+                            currentEdge->getMappedName(), currentEdge->getSegmentNumber())) {
+
+                            newEdge->sourceIndex(currentEdge->sourceIndex());
+                            usedIndices.insert(newEdge->sourceIndex());
+                        break;
+                    }
+                }
+            }
+
+            // Gives a new index to any new edges that were not in the previous geometry object
+            // makes sure that all edges have a unique index
+            int nextIndex = 0;
+            for (auto& newEdge : newEdges) {
+                if (usedIndices.contains(newEdge->sourceIndex())) {
+                    continue;
+                }
+                while (usedIndices.contains(nextIndex)) {
+                    nextIndex++;
+                }
+                newEdge->sourceIndex(nextIndex);
+            }
+        }
+
         geometryObject = m_tempGeometryObject;//replace with new
         m_tempGeometryObject = nullptr;       //superfluous?
     }
@@ -471,7 +502,8 @@ void DrawViewPart::postHlrTasks()
     if (ScaleType.isValue("Automatic") && !checkFit()) {
         double newScale = autoScale();
         Scale.setValue(newScale);
-        partExec(m_saveShape);
+        Part::TopoShape saveShape(m_saveShape);
+        partExec(saveShape);
     }
 
     overrideKeepUpdated(false);
@@ -1168,7 +1200,7 @@ Base::Vector3d DrawViewPart::getOriginalCentroid() const { return m_saveCentroid
 
 Base::Vector3d DrawViewPart::getCurrentCentroid() const
 {
-    TopoDS_Shape shape = getSourceShape();
+    TopoDS_Shape shape = getSourceShape().getShape();
     if (shape.IsNull()) {
         return Base::Vector3d(0.0, 0.0, 0.0);
     }

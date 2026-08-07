@@ -154,6 +154,10 @@ class TechDrawExport BaseGeom : public std::enable_shared_from_this<BaseGeom>, p
         void setOCCEdge(const TopoDS_Edge& newEdge)  { occEdge = newEdge; }
         bool getCosmetic() const  { return cosmetic; }
         void setCosmetic (bool state)  { cosmetic = state; }
+        std::string getMappedName() const { return mappedName; }
+        void setMappedName(std::string name) { mappedName = name; }
+        int getSegmentNumber() const { return segmentNumber; }
+        void setSegmentNumber(int idx) { segmentNumber = idx; }
         SourceType source() { return m_source; }
         void source(SourceType s) { m_source = s; }
         int sourceIndex() const { return m_sourceIndex; }
@@ -182,6 +186,8 @@ protected:
         SourceType m_source;
         int m_sourceIndex;
         std::string cosmeticTag;
+        std::string mappedName;
+        int segmentNumber = 0;
 //NOLINTEND (misc-non-private-member-variables-in-classes)
 };
 using BaseGeomPtrVector = std::vector<BaseGeomPtr>;    //new style
