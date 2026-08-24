@@ -32,6 +32,7 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepGProp.hxx>
 #include <BRepLProp_CLProps.hxx>
 #include <BRepLib.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
@@ -39,14 +40,20 @@
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
+#include <GProp_GProps.hxx>
 #include <HLRAlgo_Projector.hxx>
 #include <HLRBRep.hxx>
 #include <HLRBRep_Algo.hxx>
 #include <HLRBRep_HLRToShape.hxx>
 #include <HLRBRep_PolyAlgo.hxx>
 #include <HLRBRep_PolyHLRToShape.hxx>
+#include <HLRBRep_ShapeBounds.hxx>
+#include <HLRTopoBRep_OutLiner.hxx>
+#include <NCollection_DataMap.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
@@ -67,6 +74,7 @@
 #include <Mod/Part/App/PartFeature.h>
 
 #include "Cosmetic.h"
+#include "GeometryMatcher.h"
 #include "DrawUtil.h"
 #include "DrawViewDetail.h"
 #include "DrawViewPart.h"
@@ -83,9 +91,15 @@ GeometryObject::GeometryObject(const string& parent, TechDraw::DrawView* parentO
     : m_parentName(parent), m_parent(parentObj), m_isoCount(0), m_isPersp(false), m_focus(100.0),
       m_usePolygonHLR(false), m_scrubCount(0)
 
-{}
+{
+    m_matcher = new GeometryMatcher();
+}
 
-GeometryObject::~GeometryObject() { clear(); }
+GeometryObject::~GeometryObject()
+{
+    clear();
+    delete m_matcher;
+}
 
 const BaseGeomPtrVector GeometryObject::getVisibleFaceEdges(const bool smooth,
                                                             const bool seam) const
@@ -148,9 +162,15 @@ HLRAlgo_Projector GeometryObject::getProjector(const gp_Ax2& viewAxis) const
     return HLRAlgo_Projector(viewAxis);
 }
 
-void GeometryObject::projectShape(const TopoDS_Shape& inShape, const gp_Ax2& viewAxis)
+void GeometryObject::projectShape(const Part::TopoShape& inPartShape, const gp_Ax2& viewAxis)
 {
     clear();
+
+    m_partShape = inPartShape;
+    TopoDS_Shape inShape = inPartShape.getShape();
+
+    Base::Console().message("GO::projectShape - DEBUG partShape hasElementMap: {}, elementMapSize: {}\n",
+                             m_partShape.hasElementMap(), m_partShape.getElementMapSize());
 
     Handle(HLRBRep_Algo) brep_hlr;
     try {
@@ -171,69 +191,81 @@ void GeometryObject::projectShape(const TopoDS_Shape& inShape, const gp_Ax2& vie
     }
 
     try {
+        
         HLRBRep_HLRToShape hlrToShape(brep_hlr);
 
-        if (!hlrToShape.VCompound().IsNull()) {
-            visHard = hlrToShape.VCompound();
-            BRepLib::BuildCurves3d(visHard);
-            visHard =ShapeUtils::invertGeometry(visHard);
-            //            BRepTools::Write(visHard, "GOvisHard.brep");            //debug
+        // All visible edges
+        visHard = hlrToShape.VCompound();
+        visSmooth = hlrToShape.Rg1LineVCompound();
+        visSeam = hlrToShape.RgNLineVCompound();
+        visIso = hlrToShape.IsoLineVCompound();
+        visOutline = hlrToShape.OutLineVCompound();
+        
+        // All hidden edges
+        hidHard = hlrToShape.HCompound();
+        hidSmooth = hlrToShape.Rg1LineHCompound();
+        hidSeam = hlrToShape.RgNLineHCompound();
+        hidIso = hlrToShape.IsoLineHCompound();
+        hidOutline = hlrToShape.OutLineHCompound();
+
+        // For every edge in the input shape, we need to find the edge segments that are related
+        TopExp_Explorer edgeExp(inShape, TopAbs_EDGE);
+        int index = 1;
+        for (; edgeExp.More(); edgeExp.Next()) {
+            const TopoDS_Shape& edge = edgeExp.Current();
+
+            // By adding edge as the input we get the edge segments related to the edge
+            bindShapesTo3d(m_visHardTopoNames, hlrToShape.VCompound(edge), edge, index);
+            bindShapesTo3d(m_visSmoothTopoNames, hlrToShape.Rg1LineVCompound(edge), edge, index);
+            bindShapesTo3d(m_visSeamTopoNames, hlrToShape.RgNLineVCompound(edge), edge, index);
+            bindShapesTo3d(m_hidHardTopoNames, hlrToShape.HCompound(edge), edge, index);
+            bindShapesTo3d(m_hidSmoothTopoNames, hlrToShape.Rg1LineHCompound(edge), edge, index);
+            bindShapesTo3d(m_hidSeamTopoNames, hlrToShape.RgNLineHCompound(edge), edge, index);
+            index++;
         }
 
-        if (!hlrToShape.Rg1LineVCompound().IsNull()) {
-            visSmooth = hlrToShape.Rg1LineVCompound();
-            BRepLib::BuildCurves3d(visSmooth);
-            visSmooth =ShapeUtils::invertGeometry(visSmooth);
+        // using the outlined shape we can get the faces that are visible and hidden
+        // this is better than using the input shape because the HLR algo will create new faces for the outline
+        TopoDS_Shape outlinedShape = brep_hlr->ShapeBounds(1).Shape()->OutLinedShape();
+        TopExp_Explorer faceExp(outlinedShape, TopAbs_FACE);
+        index = 1;
+        for (; faceExp.More(); faceExp.Next()) {
+            const TopoDS_Shape& face = faceExp.Current();
+            // Same here. By adding the face as the input we get the edges related to the face
+            // Mostly silhuettes around cylinders, cones etc.
+            bindShapesTo3d(m_visOutlineTopoNames, hlrToShape.OutLineVCompound(face), face, index);
+            bindShapesTo3d(m_hidOutlineTopoNames, hlrToShape.OutLineHCompound(face), face, index);
+            bindShapesTo3d(m_visIsoTopoNames, hlrToShape.IsoLineVCompound(face), face, index);
+            bindShapesTo3d(m_hidIsoTopoNames, hlrToShape.IsoLineHCompound(face), face, index);
+            index++;
         }
 
-        if (!hlrToShape.RgNLineVCompound().IsNull()) {
-            visSeam = hlrToShape.RgNLineVCompound();
-            BRepLib::BuildCurves3d(visSeam);
-            visSeam =ShapeUtils::invertGeometry(visSeam);
-        }
+        // This might all seem weird, but the HLR algo does not match all edges to the input shape
+        // For some reason it will create "Orphan" edges that it does not know where came from
+        // This only happens for complex shapes like impellers etc. However this can make a mismatch
+        // Between the number of edges in the TopoDS_Shape list and the edges in EdgeSegment list
+        // This merges the list so they become the same length
+        m_visHardTopoNames = mergeSegmentLists(visHard, m_visHardTopoNames);
+        m_visSmoothTopoNames = mergeSegmentLists(visSmooth, m_visSmoothTopoNames);
+        m_visSeamTopoNames = mergeSegmentLists(visSeam, m_visSeamTopoNames);
+        m_visIsoTopoNames = mergeSegmentLists(visIso, m_visIsoTopoNames);
+        m_visOutlineTopoNames = mergeSegmentLists(visOutline, m_visOutlineTopoNames);
+        m_hidHardTopoNames = mergeSegmentLists(hidHard, m_hidHardTopoNames);
+        m_hidSmoothTopoNames = mergeSegmentLists(hidSmooth, m_hidSmoothTopoNames);
+        m_hidSeamTopoNames = mergeSegmentLists(hidSeam, m_hidSeamTopoNames);
+        m_hidIsoTopoNames = mergeSegmentLists(hidIso, m_hidIsoTopoNames);
+        m_hidOutlineTopoNames = mergeSegmentLists(hidOutline, m_hidOutlineTopoNames);
 
-        if (!hlrToShape.OutLineVCompound().IsNull()) {
-            //            BRepTools::Write(hlrToShape.OutLineVCompound(), "GOOutLineVCompound.brep");            //debug
-            visOutline = hlrToShape.OutLineVCompound();
-            BRepLib::BuildCurves3d(visOutline);
-            visOutline =ShapeUtils::invertGeometry(visOutline);
-        }
-
-        if (!hlrToShape.IsoLineVCompound().IsNull()) {
-            visIso = hlrToShape.IsoLineVCompound();
-            BRepLib::BuildCurves3d(visIso);
-            visIso =ShapeUtils::invertGeometry(visIso);
-        }
-
-        if (!hlrToShape.HCompound().IsNull()) {
-            hidHard = hlrToShape.HCompound();
-            BRepLib::BuildCurves3d(hidHard);
-            hidHard =ShapeUtils::invertGeometry(hidHard);
-        }
-
-        if (!hlrToShape.Rg1LineHCompound().IsNull()) {
-            hidSmooth = hlrToShape.Rg1LineHCompound();
-            BRepLib::BuildCurves3d(hidSmooth);
-            hidSmooth =ShapeUtils::invertGeometry(hidSmooth);
-        }
-
-        if (!hlrToShape.RgNLineHCompound().IsNull()) {
-            hidSeam = hlrToShape.RgNLineHCompound();
-            BRepLib::BuildCurves3d(hidSeam);
-            hidSeam =ShapeUtils::invertGeometry(hidSeam);
-        }
-
-        if (!hlrToShape.OutLineHCompound().IsNull()) {
-            hidOutline = hlrToShape.OutLineHCompound();
-            BRepLib::BuildCurves3d(hidOutline);
-            hidOutline =ShapeUtils::invertGeometry(hidOutline);
-        }
-
-        if (!hlrToShape.IsoLineHCompound().IsNull()) {
-            hidIso = hlrToShape.IsoLineHCompound();
-            BRepLib::BuildCurves3d(hidIso);
-            hidIso =ShapeUtils::invertGeometry(hidIso);
-        }
+        buildAndInvert(visHard);
+        buildAndInvert(visSmooth);
+        buildAndInvert(visSeam);
+        buildAndInvert(visIso);
+        buildAndInvert(visOutline);
+        buildAndInvert(hidHard);
+        buildAndInvert(hidSmooth);
+        buildAndInvert(hidSeam);
+        buildAndInvert(hidIso);
+        buildAndInvert(hidOutline);
     }
     catch (const Standard_Failure&) {
         throw Base::RuntimeError(
@@ -245,6 +277,83 @@ void GeometryObject::projectShape(const TopoDS_Shape& inShape, const gp_Ax2& vie
     }
 
     makeTDGeometry();
+}
+
+void GeometryObject::buildAndInvert(TopoDS_Shape& shape)
+{
+    if (!shape.IsNull()) {
+        BRepLib::BuildCurves3d(shape);
+        shape = ShapeUtils::invertGeometry(shape);
+    }
+}
+
+void GeometryObject::bindShapesTo3d(std::vector<EdgeSegment>& segmentList, const TopoDS_Shape& shape, 
+                                    const TopoDS_Shape& source, int index)
+{
+    if (shape.IsNull()) {
+        return;
+    }
+
+    std::string mappedName;
+    std::string parentName;
+
+    if (source.ShapeType() == TopAbs_EDGE) {
+        parentName = "Edge" + std::to_string(index);
+
+        Data::MappedName mapped = m_partShape.getMappedName(
+            Data::IndexedName::fromConst("Edge", index), false);
+        mappedName = mapped.toString();
+    }
+    else if (source.ShapeType() == TopAbs_FACE) {
+        parentName = "Face" + std::to_string(index);
+
+        Data::MappedName mapped = m_partShape.getMappedName(
+            Data::IndexedName::fromConst("Face", index), false);
+        mappedName = mapped.toString();
+    }
+
+
+    // For every edge in the compound shape
+    // We add the parents name (like "Edge15") the mapped name (the toponaming part)
+    // And the segment number, 1 if it is the only segment from the parent etc.
+    TopExp_Explorer exp(shape, TopAbs_EDGE);
+    std::vector<EdgeSegment> edgeSegments;
+    int segmentNumber = 1;
+    for (; exp.More(); exp.Next()) {
+        EdgeSegment segment;
+        segment.edge = exp.Current();
+        segment.mappedName = mappedName;
+        segment.parentName = parentName;
+        segment.number = segmentNumber;
+        segmentList.push_back(segment);
+        segmentNumber++;
+    }
+}
+
+std::vector<TechDraw::GeometryObject::EdgeSegment> GeometryObject::mergeSegmentLists(TopoDS_Shape compound, std::vector<EdgeSegment> edgeSegments) {
+    std::vector<EdgeSegment> mergedSegments;
+    TopExp_Explorer exp(compound, TopAbs_EDGE);
+    for (; exp.More(); exp.Next()) {
+        const TopoDS_Shape& edge = exp.Current();
+        bool found = false;
+        for (auto& segment : edgeSegments) {
+            if (m_matcher->compareGeometry(edge, segment.edge)) {
+                mergedSegments.push_back(segment);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            // No matching found so just create an empty segment
+            EdgeSegment emptySegment;
+            emptySegment.edge = TopoDS_Shape();
+            emptySegment.mappedName = "";
+            emptySegment.parentName = "";
+            emptySegment.number = 0;
+            mergedSegments.push_back(emptySegment);
+        }
+    }
+    return mergedSegments;
 }
 
 //convert the hlr output into TD Geometry
@@ -287,23 +396,26 @@ void GeometryObject::makeTDGeometry()
 
 
 //!set up a hidden line remover and project a shape with it
-void GeometryObject::projectShapeWithPolygonAlgo(const TopoDS_Shape& input, const gp_Ax2& viewAxis)
+void GeometryObject::projectShapeWithPolygonAlgo(const Part::TopoShape& input, const gp_Ax2& viewAxis)
 {
 //    Base::Console().message("GO::projectShapeWithPolygonAlgo()\n");
     // Clear previous Geometry
     clear();
+
+    m_partShape = input;
+    TopoDS_Shape inShape = input.getShape();
 
     //work around for Mantis issue #3332
     //if 3332 gets fixed in OCC, this will produce shifted views and will need
     //to be reverted.
     TopoDS_Shape inCopy;
     if (!m_isPersp) {
-        gp_Pnt gCenter = ShapeUtils::findCentroid(input, viewAxis);
+        gp_Pnt gCenter = ShapeUtils::findCentroid(inShape, viewAxis);
         Base::Vector3d motion(-gCenter.X(), -gCenter.Y(), -gCenter.Z());
-        inCopy = ShapeUtils::moveShape(input, motion);
+        inCopy = ShapeUtils::moveShape(inShape, motion);
     }
     else {
-        BRepBuilderAPI_Copy BuilderCopy(input);
+        BRepBuilderAPI_Copy BuilderCopy(inShape);
         inCopy = BuilderCopy.Shape();
     }
 
@@ -342,39 +454,67 @@ void GeometryObject::projectShapeWithPolygonAlgo(const TopoDS_Shape& input, cons
         HLRBRep_PolyHLRToShape polyhlrToShape;
         polyhlrToShape.Update(brep_hlrPoly);
 
+        // All visible edges
         visHard = polyhlrToShape.VCompound();
-        BRepLib::BuildCurves3d(visHard);
-        visHard =ShapeUtils::invertGeometry(visHard);
-        //        BRepTools::Write(visHard, "GOvisHardi.brep");            //debug
-
         visSmooth = polyhlrToShape.Rg1LineVCompound();
-        BRepLib::BuildCurves3d(visSmooth);
-        visSmooth =ShapeUtils::invertGeometry(visSmooth);
-
         visSeam = polyhlrToShape.RgNLineVCompound();
-        BRepLib::BuildCurves3d(visSeam);
-        visSeam =ShapeUtils::invertGeometry(visSeam);
-
         visOutline = polyhlrToShape.OutLineVCompound();
-        BRepLib::BuildCurves3d(visOutline);
-        visOutline =ShapeUtils::invertGeometry(visOutline);
-
+        
+        // All hidden edges
         hidHard = polyhlrToShape.HCompound();
-        BRepLib::BuildCurves3d(hidHard);
-        hidHard =ShapeUtils::invertGeometry(hidHard);
-        //        BRepTools::Write(hidHard, "GOhidHardi.brep");            //debug
-
         hidSmooth = polyhlrToShape.Rg1LineHCompound();
-        BRepLib::BuildCurves3d(hidSmooth);
-        hidSmooth =ShapeUtils::invertGeometry(hidSmooth);
-
         hidSeam = polyhlrToShape.RgNLineHCompound();
-        BRepLib::BuildCurves3d(hidSeam);
-        hidSeam =ShapeUtils::invertGeometry(hidSeam);
-
         hidOutline = polyhlrToShape.OutLineHCompound();
-        BRepLib::BuildCurves3d(hidOutline);
-        hidOutline =ShapeUtils::invertGeometry(hidOutline);
+
+        // For every edge in the input shape, we need to find the edge segments that are related
+        TopExp_Explorer edgeExp(inShape, TopAbs_EDGE);
+        int index = 1;
+        for (; edgeExp.More(); edgeExp.Next()) {
+            const TopoDS_Shape& edge = edgeExp.Current();
+
+            // By adding edge as the input we get the edge segments related to the edge
+            bindShapesTo3d(m_visHardTopoNames, polyhlrToShape.VCompound(edge), edge, index);
+            bindShapesTo3d(m_visSmoothTopoNames, polyhlrToShape.Rg1LineVCompound(edge), edge, index);
+            bindShapesTo3d(m_visSeamTopoNames, polyhlrToShape.RgNLineVCompound(edge), edge, index);
+            bindShapesTo3d(m_hidHardTopoNames, polyhlrToShape.HCompound(edge), edge, index);
+            bindShapesTo3d(m_hidSmoothTopoNames, polyhlrToShape.Rg1LineHCompound(edge), edge, index);
+            bindShapesTo3d(m_hidSeamTopoNames, polyhlrToShape.RgNLineHCompound(edge), edge, index);
+            index++;
+        }
+
+        TopExp_Explorer faceExp(inShape, TopAbs_FACE);
+        index = 1;
+        for (; faceExp.More(); faceExp.Next()) {
+            const TopoDS_Shape& face = faceExp.Current();
+            // Same here. By adding the face as the input we get the edges related to the face
+            // Mostly silhuettes around cylinders, cones etc.
+            bindShapesTo3d(m_visOutlineTopoNames, polyhlrToShape.OutLineVCompound(face), face, index);
+            bindShapesTo3d(m_hidOutlineTopoNames, polyhlrToShape.OutLineHCompound(face), face, index);
+            index++;
+        }
+
+        // This might all seem weird, but the HLR algo does not match all edges to the input shape
+        // For some reason it will create "Orphan" edges that it does not know where came from
+        // This only happens for complex shapes like impellers etc. However this can make a mismatch
+        // Between the number of edges in the TopoDS_Shape list and the edges in EdgeSegment list
+        // This merges the list so they become the same length
+        m_visHardTopoNames = mergeSegmentLists(visHard, m_visHardTopoNames);
+        m_visSmoothTopoNames = mergeSegmentLists(visSmooth, m_visSmoothTopoNames);
+        m_visSeamTopoNames = mergeSegmentLists(visSeam, m_visSeamTopoNames);
+        m_visOutlineTopoNames = mergeSegmentLists(visOutline, m_visOutlineTopoNames);
+        m_hidHardTopoNames = mergeSegmentLists(hidHard, m_hidHardTopoNames);
+        m_hidSmoothTopoNames = mergeSegmentLists(hidSmooth, m_hidSmoothTopoNames);
+        m_hidSeamTopoNames = mergeSegmentLists(hidSeam, m_hidSeamTopoNames);
+        m_hidOutlineTopoNames = mergeSegmentLists(hidOutline, m_hidOutlineTopoNames);
+
+        buildAndInvert(visHard);
+        buildAndInvert(visSmooth);
+        buildAndInvert(visSeam);
+        buildAndInvert(visOutline);
+        buildAndInvert(hidHard);
+        buildAndInvert(hidSmooth);
+        buildAndInvert(hidSeam);
+        buildAndInvert(hidOutline);
     }
     catch (const Standard_Failure& e) {
         Base::Console().error(
@@ -458,22 +598,28 @@ void GeometryObject::extractGeometry(EdgeClass category, bool hlrVisible)
 {
     //    Base::Console().message("GO::extractGeometry({}, {})\n", category, hlrVisible);
     TopoDS_Shape filtEdges;
+    std::vector<EdgeSegment> filtNames;
     if (hlrVisible) {
         switch (category) {
             case EdgeClass::HARD:
                 filtEdges = visHard;
+                filtNames = m_visHardTopoNames;
                 break;
             case EdgeClass::OUTLINE:
                 filtEdges = visOutline;
+                filtNames = m_visOutlineTopoNames;
                 break;
             case EdgeClass::SMOOTH:
                 filtEdges = visSmooth;
+                filtNames = m_visSmoothTopoNames;
                 break;
             case EdgeClass::SEAM:
                 filtEdges = visSeam;
+                filtNames = m_visSeamTopoNames;
                 break;
             case EdgeClass::UVISO:
                 filtEdges = visIso;
+                filtNames = m_visIsoTopoNames;
                 break;
             default:
                 Base::Console().warning(
@@ -486,18 +632,23 @@ void GeometryObject::extractGeometry(EdgeClass category, bool hlrVisible)
         switch (category) {
             case EdgeClass::HARD:
                 filtEdges = hidHard;
+                filtNames = m_hidHardTopoNames;
                 break;
             case EdgeClass::OUTLINE:
                 filtEdges = hidOutline;
+                filtNames = m_hidOutlineTopoNames;
                 break;
             case EdgeClass::SMOOTH:
                 filtEdges = hidSmooth;
+                filtNames = m_hidSmoothTopoNames;
                 break;
             case EdgeClass::SEAM:
                 filtEdges = hidSeam;
+                filtNames = m_hidSeamTopoNames;
                 break;
             case EdgeClass::UVISO:
                 filtEdges = hidIso;
+                filtNames = m_hidIsoTopoNames;
                 break;
             default:
                 Base::Console().warning(
@@ -507,12 +658,12 @@ void GeometryObject::extractGeometry(EdgeClass category, bool hlrVisible)
         }
     }
 
-    addGeomFromCompound(filtEdges, category, hlrVisible);
+    addGeomFromCompound(filtEdges, category, hlrVisible, filtNames);
 }
 
 //! update edgeGeom and vertexGeom from Compound of edges
 void GeometryObject::addGeomFromCompound(TopoDS_Shape edgeCompound, EdgeClass category,
-                                         bool hlrVisible)
+                                         bool hlrVisible, const std::vector<EdgeSegment>& topoNames)
 {
     if (edgeCompound.IsNull()) {
         return;    // There is no OpenCascade Geometry to be calculated
@@ -520,11 +671,26 @@ void GeometryObject::addGeomFromCompound(TopoDS_Shape edgeCompound, EdgeClass ca
 
     // remove overlapping edges
     TopoDS_Shape cleanShape;
+    std::vector<EdgeSegment> edgeSegments = topoNames;
     if (m_scrubCount > 0) {
         std::vector<TopoDS_Edge> edgeVector = DU::shapeToVector(edgeCompound);
+        std::vector<TopoDS_Edge> originalEdgeVector = edgeVector;
         for (int iPass = 0; iPass < m_scrubCount; iPass++)  {
             edgeVector = DrawProjectSplit::removeOverlapEdges(edgeVector);
         }
+
+        edgeSegments.clear();
+        for (auto& edge : edgeVector) {
+            EdgeSegment matchedSegment;
+            for (size_t iOld = 0; iOld < originalEdgeVector.size(); iOld++) {
+                if (edge.IsSame(originalEdgeVector.at(iOld))) {
+                    matchedSegment = topoNames.at(iOld);
+                    break;
+                }
+            }
+            edgeSegments.push_back(matchedSegment);
+        }
+
         bool invertResult = false;
         cleanShape = DU::vectorToCompound(edgeVector, invertResult);
 
@@ -552,10 +718,14 @@ void GeometryObject::addGeomFromCompound(TopoDS_Shape edgeCompound, EdgeClass ca
             continue;
         }
 
+        EdgeSegment segment = edgeSegments.at(i - 1);
+
         base->source(SourceType::GEOMETRY);
         base->sourceIndex(i - 1);
         base->setClassOfEdge(category);
         base->setHlrVisible(hlrVisible);
+        base->setMappedName(segment.mappedName);
+        base->setSegmentNumber(segment.number);
         edgeGeom.push_back(base);
 
         //add vertices of new edge if not already in list
@@ -578,19 +748,28 @@ void GeometryObject::addGeomFromCompound(TopoDS_Shape edgeCompound, EdgeClass ca
         for (; itVertex != vertexGeom.end(); itVertex++) {
             if ((*itVertex)->isEqual(*v1, Precision::Confusion())) {
                 v1Add = false;
+                // Append the segment mapped name to the existing vertex
+                (*itVertex)->setMappedNames(segment.mappedName);
+                (*itVertex)->setSegmentNumbers(segment.number);
             }
             if ((*itVertex)->isEqual(*v2, Precision::Confusion())) {
                 v2Add = false;
+                (*itVertex)->setMappedNames(segment.mappedName);
+                (*itVertex)->setSegmentNumbers(segment.number);
             }
             if (circle) {
                 if ((*itVertex)->isEqual(*c1, Precision::Confusion())) {
                     c1Add = false;
+                    (*itVertex)->setMappedNames(segment.mappedName);
+                    (*itVertex)->setSegmentNumbers(segment.number);
                 }
             }
         }
         if (v1Add) {
             vertexGeom.push_back(v1);
             v1->setHlrVisible(hlrVisible);
+            v1->setMappedNames(segment.mappedName);
+            v1->setSegmentNumbers(segment.number);
         }
         else {
             //    delete v1;
@@ -598,6 +777,8 @@ void GeometryObject::addGeomFromCompound(TopoDS_Shape edgeCompound, EdgeClass ca
         if (v2Add) {
             vertexGeom.push_back(v2);
             v2->setHlrVisible(hlrVisible);
+            v2->setMappedNames(segment.mappedName);
+            v2->setSegmentNumbers(segment.number);
         }
         else {
             //    delete v2;
@@ -607,6 +788,8 @@ void GeometryObject::addGeomFromCompound(TopoDS_Shape edgeCompound, EdgeClass ca
             if (c1Add) {
                 vertexGeom.push_back(c1);
                 c1->setHlrVisible(hlrVisible);
+                c1->setMappedNames(segment.mappedName);
+                c1->setSegmentNumbers(segment.number);
             }
             else {
                 //    delete c1;
@@ -849,4 +1032,3 @@ bool GeometryObject::findVertex(Base::Vector3d v)
     }
     return false;
 }
-

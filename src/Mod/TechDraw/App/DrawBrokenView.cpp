@@ -76,6 +76,7 @@
 #include <Base/Parameter.h>
 
 #include <Mod/Part/App/PartFeature.h>
+#include <Mod/Part/App/TopoShape.h>
 
 #include "DrawGeomHatch.h"
 #include "DrawHatch.h"
@@ -147,7 +148,7 @@ App::DocumentObjectExecReturn* DrawBrokenView::execute()
         return DrawView::execute();     // NOLINT
     }
 
-    TopoDS_Shape shape = getSourceShape();
+    TopoDS_Shape shape = getSourceShape().getShape();
     if (shape.IsNull()) {
         Base::Console().message("DBV::execute - {} - Source shape is Null.\n", getNameInDocument());
         return DrawView::execute();     // NOLINT
@@ -160,7 +161,9 @@ App::DocumentObjectExecReturn* DrawBrokenView::execute()
     TopoDS_Shape brokenShape = breakShape(safeShape);
     m_compressedShape = compressShape(brokenShape);
 
-    partExec(m_compressedShape);
+    Part::TopoShape compressedShape(m_compressedShape);
+
+    partExec(compressedShape);
 
     return DrawView::execute();     // NOLINT
 }

@@ -414,12 +414,13 @@ void QGIViewPart::drawAllEdges()
     const TechDraw::BaseGeomPtrVector& geoms = dvp->getEdgeGeometry();
     auto itGeom = geoms.begin();
     QGIEdge* item{};
-    for (int iEdge = 0; itGeom != geoms.end(); itGeom++, iEdge++) {
+    for (; itGeom != geoms.end(); itGeom++) {
         bool showItem = true;
         if (!showThisEdge(*itGeom)) {
             continue;
         }
 
+        int iEdge = (*itGeom)->getGeometryIndex();
         item = new QGIEdge(iEdge);
         addToGroupWithoutUpdate(item);      //item is created at scene(0, 0), not group(0, 0)
         item->setPath(drawPainterPath(*itGeom));
@@ -507,7 +508,8 @@ void QGIViewPart::drawAllVertexes()
 
     const std::vector<TechDraw::VertexPtr>& verts = dvp->getVertexGeometry();
     auto vert = verts.begin();
-    for (int i = 0; vert != verts.end(); ++vert, i++) {
+    for (; vert != verts.end(); ++vert) {
+        int i = (*vert)->getGeometryIndex();
         if ((*vert)->isCenter()) {
             auto* cmItem = new QGICMark(i);
             addToGroupWithoutUpdate(cmItem);

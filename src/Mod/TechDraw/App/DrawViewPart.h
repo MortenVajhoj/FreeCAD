@@ -35,6 +35,7 @@
 #include <App/DocumentObject.h>
 #include <App/FeaturePython.h>
 #include <App/PropertyLinks.h>
+#include <App/PropertyStandard.h>
 #include <Base/BoundBox.h>
 #include <Mod/TechDraw/TechDrawGlobal.h>
 
@@ -50,6 +51,11 @@ class TopoDS_Shape;
 namespace App
 {
 class Part;
+}
+
+namespace Part
+{
+class TopoShape;
 }
 
 namespace TechDraw
@@ -136,6 +142,14 @@ public:
 
     App::PropertyInteger ScrubCount;
 
+    App::PropertyIntegerList SavedEdgeIndices;
+    App::PropertyStringList SavedEdgeMappedNames;
+    App::PropertyIntegerList SavedEdgeSegmentNumbers;
+
+    App::PropertyIntegerList SavedVertexIndices;
+    App::PropertyStringList SavedVertexMappedNames;
+    App::PropertyIntegerList SavedVertexSegmentNumbers;
+
     short mustExecute() const override;
     App::DocumentObjectExecReturn* execute() override;
     const char* getViewProviderName() const override { return "TechDrawGui::ViewProviderViewPart"; }
@@ -144,6 +158,7 @@ public:
         Base::XMLReader &reader, const char * TypeName, App::Property * prop) override;
 
     TopoDS_Shape scaleAndRotate(const TopoDS_Shape& input) const;
+    Part::TopoShape scaleAndRotate(const Part::TopoShape& input) const;
 
     std::vector<TechDraw::DrawHatch*> getHatches() const;
     std::vector<TechDraw::DrawGeomHatch*> getGeomHatches() const;
@@ -212,7 +227,7 @@ public:
     bool identifyVoids();
     bool isUnsetting() { return nowUnsetting; }
 
-    virtual TopoDS_Shape getSourceShape(bool fuse = false, bool allow2d = true) const;
+    virtual Part::TopoShape getSourceShape(bool fuse = false, bool allow2d = true) const;
     virtual TopoDS_Shape getShapeForDetail() const;
     std::vector<App::DocumentObject*> getAllSources() const;
 
@@ -261,10 +276,10 @@ protected:
     void unsetupObject() override;
 
     virtual TopoDS_Shape getShapeForGeometryBuild() const;
-    virtual TechDraw::GeometryObjectPtr buildGeometryObject(const TopoDS_Shape& shape,
+    virtual TechDraw::GeometryObjectPtr buildGeometryObject(const Part::TopoShape& shape,
                                                             const gp_Ax2& viewAxis);
-    virtual TechDraw::GeometryObjectPtr makeGeometryForShape(const TopoDS_Shape& shape);//const??
-    void partExec(TopoDS_Shape& shape);
+    virtual TechDraw::GeometryObjectPtr makeGeometryForShape(const Part::TopoShape& shape);//const??
+    void partExec(Part::TopoShape& shape);
     virtual void addPoints(void);
 
     void extractFaces();
@@ -275,6 +290,12 @@ protected:
     // Attempt to decide whether each face represents either the material or a hole
     virtual void assignFaceRepresentations(const std::vector<TechDraw::FacePtr>& faces,
                                            const std::vector<TopoDS_Face>& occFaces);
+
+    void setEdgeIndices();
+    void setVertexIndices();
+    bool matchElements(const Part::TopoShape& partShape,
+                                    const std::string& newMappedName, int newSegmentNumber,
+                                    const std::string& oldMappedName, int oldSegmentNumber);
 
     Base::Vector3d shapeCentroid;
 

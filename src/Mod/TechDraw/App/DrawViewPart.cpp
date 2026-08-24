@@ -64,6 +64,9 @@
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
+#include <algorithm>
+#include <map>
+#include <set>
 #include <sstream>
 
 
@@ -95,6 +98,8 @@
 #include "Preferences.h"
 #include "ShapeUtils.h"
 
+#include <Mod/Part/App/TopoShape.h>
+
 using namespace TechDraw;
 using DU = DrawUtil;
 
@@ -110,6 +115,7 @@ DrawViewPart::DrawViewPart()
 {
     static const char* group = "Projection";
     static const char* sgroup = "HLR Parameters";
+    static const char* namingGroup = "Element Naming";
 
     CosmeticExtension::initExtension(this);
 
@@ -152,6 +158,19 @@ DrawViewPart::DrawViewPart()
     ADD_PROPERTY_TYPE(ScrubCount, (Preferences::scrubCount()), sgroup, App::Prop_None,
                       "The number of times FreeCAD should try to clean the HLR result.");
 
+    ADD_PROPERTY_TYPE(SavedEdgeIndices, (), namingGroup, App::Prop_Hidden,
+                      "Indices of the saved edges");
+    ADD_PROPERTY_TYPE(SavedEdgeMappedNames, (), namingGroup, App::Prop_Hidden,
+                      "Mapped names of the saved edges");
+    ADD_PROPERTY_TYPE(SavedEdgeSegmentNumbers, (), namingGroup, App::Prop_Hidden,
+                      "Segment numbers for the saved edges");
+    ADD_PROPERTY_TYPE(SavedVertexIndices, (), namingGroup, App::Prop_Hidden,
+                      "Indices of the saved vertices");
+    ADD_PROPERTY_TYPE(SavedVertexMappedNames, (), namingGroup, App::Prop_Hidden,
+                      "Mapped names of the saved vertices");
+    ADD_PROPERTY_TYPE(SavedVertexSegmentNumbers, (), namingGroup, App::Prop_Hidden,
+                      "Segment numbers for the saved vertices");
+
     //initialize bbox to non-garbage
     bbox = Base::BoundBox3d(Base::Vector3d(0.0, 0.0, 0.0), 0.0);
 }
@@ -170,9 +189,8 @@ DrawViewPart::~DrawViewPart()
     removeAllReferencesFromGeom();
 }
 
-//! returns a compound of all the shapes from the DocumentObjects in the Source &
-//!  XSource property lists
-TopoDS_Shape DrawViewPart::getSourceShape(bool fuse, bool allow2d) const
+
+Part::TopoShape DrawViewPart::getSourceShape(bool fuse, bool allow2d) const
 {
 //    Base::Console().message("DVP::getSourceShape()\n");
     const std::vector<App::DocumentObject*>& links = getAllSources();
@@ -180,7 +198,7 @@ TopoDS_Shape DrawViewPart::getSourceShape(bool fuse, bool allow2d) const
         return {};
     }
     if (fuse) {
-        return ShapeExtractor::getShapesFused(links);
+        return Part::TopoShape(ShapeExtractor::getShapesFused(links));
     }
     return ShapeExtractor::getShapes(links, allow2d);
 }
@@ -190,7 +208,7 @@ TopoDS_Shape DrawViewPart::getSourceShape(bool fuse, bool allow2d) const
 //! version of the shape?  Should we have a getShapeForSection?
 TopoDS_Shape DrawViewPart::getShapeForDetail() const
 {
-    return ShapeUtils::rotateShape(getSourceShape(false), getProjectionCS(), Rotation.getValue());
+    return ShapeUtils::rotateShape(getSourceShape(false), getProjectionCS(), Rotation.getValue()).getShape();
 }
 
 //! combine the regular links and xlinks into a single list
@@ -240,8 +258,8 @@ App::DocumentObjectExecReturn* DrawViewPart::execute()
         return DrawView::execute();
     }
 
-    TopoDS_Shape shape = getSourceShape();
-    if (shape.IsNull()) {
+    Part::TopoShape shape = getSourceShape();
+    if (shape.isNull()) {
         Base::Console().message("DVP::execute - {} - Source shape is Null.\n", getNameInDocument());
         return DrawView::execute();
     }
@@ -294,7 +312,7 @@ void DrawViewPart::onChanged(const App::Property* prop)
     DrawView::onChanged(prop);
 }
 
-void DrawViewPart::partExec(TopoDS_Shape& shape)
+void DrawViewPart::partExec(Part::TopoShape& shape)
 {
     if (waitingForHlr()) {
         //finish what we are already doing before starting a new cycle
@@ -310,22 +328,25 @@ void DrawViewPart::partExec(TopoDS_Shape& shape)
     }
 }
 
-//! prepare the shape for HLR processing by centering, scaling and rotating it
-GeometryObjectPtr DrawViewPart::makeGeometryForShape(const TopoDS_Shape& shape)
+
+GeometryObjectPtr DrawViewPart::makeGeometryForShape(const Part::TopoShape& shape)
 {
     // if we use the passed reference directly, the centering doesn't work.  Maybe the underlying OCC TShape
     // isn't modified?  using a copy works and the referenced shape (from getSourceShape in execute())
     // isn't used for anything anyway.
     bool copyGeometry = true;
     bool copyMesh = false;
-    BRepBuilderAPI_Copy copier(shape, copyGeometry, copyMesh);
+    BRepBuilderAPI_Copy copier(shape.getShape(), copyGeometry, copyMesh);
     TopoDS_Shape localShape = copier.Shape();
 
     gp_Pnt gCentroid = ShapeUtils::findCentroid(localShape, getProjectionCS());
     m_saveCentroid = Base::convertTo<Base::Vector3d>(gCentroid);
     m_saveShape = ShapeUtils::centerShape(localShape, m_saveCentroid);
 
-    return buildGeometryObject(getShapeForGeometryBuild(), getProjectionCS());
+    // build from the source TopoShape so the element map survives into the HLR result
+    Part::TopoShape mappedShape = scaleAndRotate(ShapeUtils::centerShape(shape, m_saveCentroid));
+
+    return buildGeometryObject(mappedShape, getProjectionCS());
 }
 
 //! Return the shape modified by scaling and rotating
@@ -340,13 +361,23 @@ TopoDS_Shape DrawViewPart::scaleAndRotate(const TopoDS_Shape& input) const
     return result;
 }
 
+//! Return the TopoShape modified by scaling and rotating, preserving its element map
+Part::TopoShape DrawViewPart::scaleAndRotate(const Part::TopoShape& input) const
+{
+    Part::TopoShape result = ShapeUtils::scaleShape(input, getScale());
+    if (!DrawUtil::fpCompare(Rotation.getValue(), 0.0)) {
+        result = ShapeUtils::rotateShape(result, getProjectionCS(), Rotation.getValue());//conventional rotation
+    }
+
+    return result;
+}
+
 TopoDS_Shape DrawViewPart::getShapeForGeometryBuild() const
 {
     return scaleAndRotate(m_saveShape);
 }
 
-//! create a geometry object and trigger the HLR process in another thread
-TechDraw::GeometryObjectPtr DrawViewPart::buildGeometryObject(const TopoDS_Shape& shape,
+TechDraw::GeometryObjectPtr DrawViewPart::buildGeometryObject(const Part::TopoShape& shape,
                                                               const gp_Ax2& viewAxis)
 {
     TechDraw::GeometryObjectPtr go(
@@ -415,6 +446,9 @@ void DrawViewPart::onHlrFinished()
 
     postHlrTasks();//application level tasks that depend on HLR/GO being complete
 
+    setEdgeIndices();
+    setVertexIndices();
+
     //start face finding in a separate thread.  We don't find faces when using the polygon
     //HLR method.
 
@@ -447,6 +481,218 @@ void DrawViewPart::onHlrFinished()
     }
 }
 
+void DrawViewPart::setEdgeIndices()
+{
+    const BaseGeomPtrVector& edges = geometryObject->getEdgeGeometry();
+
+    std::vector<long> savedIndices = SavedEdgeIndices.getValues();
+    std::vector<std::string> savedNames = SavedEdgeMappedNames.getValues();
+    std::vector<long> savedSegments = SavedEdgeSegmentNumbers.getValues();
+
+    size_t savedCount = savedIndices.size();
+    const Part::TopoShape& partShape = geometryObject->getPartShape();
+
+    // start all as false
+    std::vector<bool> claimed(savedCount, false);
+
+    for (auto& edge : edges) {
+        long edgeIndex = -1;
+        
+        for (size_t index = 0; index < savedCount; index++) {
+            if (claimed[index]) {
+                continue;
+            }
+
+            const std::string mappedName = edge->getMappedName();
+            const int segmentNumber = edge->getSegmentNumber();
+
+            // matches the new edge to the saved edge
+            bool isSame = matchElements(partShape, mappedName, segmentNumber,
+                                       savedNames[index], savedSegments[index]);
+
+            if (isSame) {
+                claimed[index] = true;
+                edgeIndex = savedIndices[index];
+                break;
+            }
+        }
+        // If the edge can be matched we keep the same index. Otherwise it is set to -1
+        edge->setGeometryIndex(static_cast<int>(edgeIndex));
+    }
+
+    // Find all of the used indices
+    std::set<long> usedIndices;
+    for (auto& edge : edges) {
+        if (edge->getGeometryIndex() >= 0) {
+            usedIndices.insert(edge->getGeometryIndex());
+        }
+    }
+
+    // Assign a new index to everything that was not matched
+    long nextIndex = 0;
+    for (auto& edge : edges) {
+        if (edge->getGeometryIndex() >= 0) {
+            continue;
+        }
+        // find the next free index
+        while (usedIndices.contains(nextIndex)) {
+            ++nextIndex;
+        }
+        edge->setGeometryIndex(static_cast<int>(nextIndex));
+        usedIndices.insert(nextIndex);
+    }
+
+    // Save it for the next time
+    savedIndices.clear();
+    savedNames.clear();
+    savedSegments.clear();
+
+    for (auto& edge : edges) {
+        savedIndices.push_back(edge->getGeometryIndex());
+        savedNames.push_back(edge->getMappedName());
+        savedSegments.push_back(edge->getSegmentNumber());
+    }
+
+    SavedEdgeIndices.setValues(savedIndices);
+    SavedEdgeMappedNames.setValues(savedNames);
+    SavedEdgeSegmentNumbers.setValues(savedSegments);
+}
+
+void DrawViewPart::setVertexIndices()
+{
+    const std::vector<VertexPtr>& vertices = geometryObject->getVertexGeometry();
+
+    std::vector<long> savedIndices = SavedVertexIndices.getValues();
+    std::vector<std::string> savedNames = SavedVertexMappedNames.getValues();
+    std::vector<long> savedSegments = SavedVertexSegmentNumbers.getValues();
+
+    size_t savedCount = savedIndices.size();
+
+    const Part::TopoShape& partShape = geometryObject->getPartShape();
+
+    std::vector<bool> claimed(savedCount, false);
+
+    for (auto& vertex : vertices) {
+        const std::vector<std::string>& names = vertex->getMappedNames();
+        const std::vector<int>& segments = vertex->getSegmentNumbers();
+
+        std::map<long, int> scoreBoard;
+
+        for (size_t i = 0; i < names.size(); i++) {
+            int segment = segments[i];
+            std::string name = names[i];
+
+            std::set<long> matchedIndices;
+            for (size_t index = 0; index < savedCount; index++) {
+                if (claimed[index]) {
+                    continue;
+                }
+                if (matchElements(partShape, name, segment,
+                                                   savedNames[index], savedSegments[index])) {
+                    matchedIndices.insert(savedIndices[index]);
+                }
+            }
+            for (long savedIndex : matchedIndices) {
+                scoreBoard[savedIndex]++;
+            }
+        }
+
+        // for vertexes since they have multiple mappedNames from geometry that connects to it
+        // we therefore find the index that has the most in common with the new vertex
+        long bestIndex = -1;
+        int bestScore = 0;
+        for (auto& [savedIndex, score] : scoreBoard) {
+            if (score > bestScore) {
+                bestScore = score;
+                bestIndex = savedIndex;
+            }
+        }
+
+        if (bestIndex >= 0) {
+            for (size_t index = 0; index < savedCount; index++) {
+                if (savedIndices[index] == bestIndex) {
+                    claimed[index] = true;
+                }
+            }
+        }
+        // If the vertex can be matched we keep the same index
+        vertex->setGeometryIndex(static_cast<int>(bestIndex));
+    }
+
+    std::set<long> usedIndices;
+    for (auto& vertex : vertices) {
+        if (vertex->getGeometryIndex() >= 0) {
+            usedIndices.insert(vertex->getGeometryIndex());
+        }
+    }
+
+    long nextIndex = 0;
+    for (auto& vertex : vertices) {
+        if (vertex->getGeometryIndex() >= 0) {
+            continue;
+        }
+        while (usedIndices.contains(nextIndex)) {
+            ++nextIndex;
+        }
+        vertex->setGeometryIndex(static_cast<int>(nextIndex));
+        usedIndices.insert(nextIndex);
+    }
+
+    savedIndices.clear();
+    savedNames.clear();
+    savedSegments.clear();
+
+    for (auto& vertex : vertices) {
+        const std::vector<std::string>& mappedNames = vertex->getMappedNames();
+        const std::vector<int>& segments = vertex->getSegmentNumbers();
+
+        // vertexes has multiple mapped names so we need to save all of them
+        for (size_t i = 0; i < mappedNames.size(); i++) {
+            savedIndices.push_back(vertex->getGeometryIndex());
+            savedNames.push_back(mappedNames[i]);
+            savedSegments.push_back(segments[i]);
+        }
+    }
+
+    SavedVertexIndices.setValues(savedIndices);
+    SavedVertexMappedNames.setValues(savedNames);
+    SavedVertexSegmentNumbers.setValues(savedSegments);
+}
+
+bool DrawViewPart::matchElements(const Part::TopoShape& partShape,
+                                    const std::string& newMappedName, int newSegmentNumber,
+                                    const std::string& oldMappedName, int oldSegmentNumber)
+{
+    if (newMappedName.empty() || oldMappedName.empty()) {
+        return false;
+    }
+    if (newSegmentNumber != oldSegmentNumber) {
+        return false;
+    }
+    if (newMappedName == oldMappedName) {
+        return true;
+    }
+    if (!partShape.hasElementMap()) {
+        return false;
+    }
+
+    Data::MappedName oldName(oldMappedName);
+    Data::MappedName newName(newMappedName);
+    bool found = false;
+
+    auto checkHistory = [&oldName, &found](const Data::MappedName& name, int, long, long) {
+        if (name == oldName) {
+            found = true;
+            return true;
+        }
+        return false;
+    };
+
+    partShape.traceElement(newName, checkHistory);
+
+    return found;
+}
+
 //! run any tasks that need to been done after geometry is available
 void DrawViewPart::postHlrTasks()
 {
@@ -474,7 +720,8 @@ void DrawViewPart::postHlrTasks()
     if (ScaleType.isValue("Automatic") && !checkFit()) {
         double newScale = autoScale();
         Scale.setValue(newScale);
-        partExec(m_saveShape);
+        Part::TopoShape saveShape(m_saveShape);
+        partExec(saveShape);
     }
 
     overrideKeepUpdated(false);
@@ -978,16 +1225,7 @@ TechDraw::VertexPtr DrawViewPart::getVertex(std::string vertexName) const
 //! TechDraw edge names run from 0 to n-1
 TechDraw::BaseGeomPtr DrawViewPart::getEdge(std::string edgeName) const
 {
-    const std::vector<TechDraw::BaseGeomPtr>& geoms = getEdgeGeometry();
-    if (geoms.empty()) {
-        //should not happen
-        return nullptr;
-    }
-    size_t iEdge = DrawUtil::getIndexFromName(edgeName);
-    if ((unsigned)iEdge >= geoms.size()) {
-        return nullptr;
-    }
-    return geoms.at(iEdge);
+    return getGeomByIndex(DrawUtil::getIndexFromName(edgeName));
 }
 
 
@@ -1028,27 +1266,23 @@ const BaseGeomPtrVector DrawViewPart::getEdgeGeometry() const
 //! returns existing BaseGeom of 2D Edge(idx)
 TechDraw::BaseGeomPtr DrawViewPart::getGeomByIndex(int idx) const
 {
-    const std::vector<TechDraw::BaseGeomPtr>& geoms = getEdgeGeometry();
-    if (geoms.empty()) {
-        return nullptr;
+    for (auto& geom : getEdgeGeometry()) {
+        if (geom->getGeometryIndex() == idx) {
+            return geom;
+        }
     }
-    if (idx >= (int)geoms.size()) {
-        return nullptr;
-    }
-    return geoms.at(idx);
+    return nullptr;
 }
 
 //! returns existing geometry of 2D Vertex(idx)
 TechDraw::VertexPtr DrawViewPart::getProjVertexByIndex(int idx) const
 {
-    const std::vector<TechDraw::VertexPtr>& geoms = getVertexGeometry();
-    if (geoms.empty()) {
-       return nullptr;
+    for (auto& geom : getVertexGeometry()) {
+        if (geom->getGeometryIndex() == idx) {
+            return geom;
+        }
     }
-    if ((unsigned)idx >= geoms.size()) {
-        return nullptr;
-    }
-    return geoms.at(idx);
+    return nullptr;
 }
 
 TechDraw::VertexPtr DrawViewPart::getProjVertexByCosTag(std::string cosTag)
@@ -1306,7 +1540,7 @@ Base::Vector3d DrawViewPart::getOriginalCentroid() const { return m_saveCentroid
 
 Base::Vector3d DrawViewPart::getCurrentCentroid() const
 {
-    TopoDS_Shape shape = getSourceShape();
+    TopoDS_Shape shape = getSourceShape().getShape();
     if (shape.IsNull()) {
         return Base::Vector3d(0.0, 0.0, 0.0);
     }

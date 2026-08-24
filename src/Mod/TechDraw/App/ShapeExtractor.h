@@ -34,16 +34,21 @@
 #include <Mod/TechDraw/TechDrawGlobal.h>
 
 
+namespace Part
+{
+class TopoShape;
+}
+
 namespace TechDraw
 {
 
 class TechDrawExport ShapeExtractor
 {
 public:
-    static TopoDS_Shape getShapes(const std::vector<App::DocumentObject*> links, bool include2d = true);
+    static Part::TopoShape getShapes(const std::vector<App::DocumentObject*> links, bool include2d = true);
     static std::vector<TopoDS_Shape> getShapes2d(const std::vector<App::DocumentObject*> links);
     static std::vector<TopoDS_Shape> getXShapes(const App::Link* xLink);
-    static TopoDS_Shape getShapesFused(const std::vector<App::DocumentObject*> links);
+    static Part::TopoShape getShapesFused(const std::vector<App::DocumentObject*> links);
     static TopoDS_Shape getShapeFromXLink(const App::Link* xLink);
     static std::vector<TopoDS_Shape> getShapesFromXRoot(const App::DocumentObject *xLinkRoot);
     static std::vector<TopoDS_Shape> getShapesFromObject(const App::DocumentObject* docObj);
@@ -58,6 +63,7 @@ public:
 
     static Base::Vector3d getLocation3dFromFeat(const App::DocumentObject *obj);
     static TopoDS_Shape getLocatedShape(const App::DocumentObject* docObj);
+    static Part::TopoShape getLocatedTopoShape(const App::DocumentObject* docObj);
 
     static bool checkShape(const App::DocumentObject* shapeObj, TopoDS_Shape shape);
 
