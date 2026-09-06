@@ -485,6 +485,10 @@ void QGIViewPart::drawAllEdges()
         item->setPos(0.0, 0.0);//now at group(0, 0)
         item->setZValue(ZVALUE::EDGE);
         item->setPrettyNormal();
+        
+        QColor tagColor = (*itGeom)->getMappedName() != "" ? QColor(Qt::green) : QColor(Qt::red);
+        item->setNormalColor(tagColor);
+
 
         if (!vp->ShowAllEdges.getValue() && !showItem) {
              //view level "show" status  && individual edge "show" status

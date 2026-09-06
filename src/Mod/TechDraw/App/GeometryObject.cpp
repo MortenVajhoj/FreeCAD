@@ -32,7 +32,6 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
-#include <BRepGProp.hxx>
 #include <BRepLProp_CLProps.hxx>
 #include <BRepLib.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
@@ -40,15 +39,12 @@
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
-#include <GProp_GProps.hxx>
 #include <HLRAlgo_Projector.hxx>
 #include <HLRBRep.hxx>
 #include <HLRBRep_Algo.hxx>
 #include <HLRBRep_HLRToShape.hxx>
 #include <HLRBRep_PolyAlgo.hxx>
 #include <HLRBRep_PolyHLRToShape.hxx>
-#include <HLRBRep_ShapeBounds.hxx>
-#include <HLRTopoBRep_OutLiner.hxx>
 #include <NCollection_DataMap.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -74,7 +70,6 @@
 #include <Mod/Part/App/PartFeature.h>
 
 #include "Cosmetic.h"
-#include "GeometryMatcher.h"
 #include "DrawUtil.h"
 #include "DrawViewDetail.h"
 #include "DrawViewPart.h"
@@ -91,14 +86,11 @@ GeometryObject::GeometryObject(const string& parent, TechDraw::DrawView* parentO
     : m_parentName(parent), m_parent(parentObj), m_isoCount(0), m_isPersp(false), m_focus(100.0),
       m_usePolygonHLR(false), m_scrubCount(0)
 
-{
-    m_matcher = new GeometryMatcher();
-}
+{}
 
 GeometryObject::~GeometryObject()
 {
     clear();
-    delete m_matcher;
 }
 
 const BaseGeomPtrVector GeometryObject::getVisibleFaceEdges(const bool smooth,
@@ -191,70 +183,35 @@ void GeometryObject::projectShape(const Part::TopoShape& inPartShape, const gp_A
     }
 
     try {
-        
-        HLRBRep_HLRToShape hlrToShape(brep_hlr);
+
+        TopTools_IndexedMapOfShape inputEdgeMap;
+        TopExp::MapShapes(inShape, TopAbs_EDGE, inputEdgeMap);
+        TopTools_IndexedMapOfShape inputFaceMap;
+        TopExp::MapShapes(inShape, TopAbs_FACE, inputFaceMap);
+
+        HLRExtractor extractor(brep_hlr);
+
+        auto extractEdges = [&](HLREdgeType type, bool visible, TopoDS_Shape& compound,
+                                    std::vector<EdgeSegment>& segments) {
+            
+            std::vector<HLREdge> hlrEdges = extractor.extract(type, visible);
+            compound = extractor.toCompound(hlrEdges);
+            segments = buildSegmentsFromTagged(hlrEdges, inputEdgeMap, inputFaceMap);
+        };
 
         // All visible edges
-        visHard = hlrToShape.VCompound();
-        visSmooth = hlrToShape.Rg1LineVCompound();
-        visSeam = hlrToShape.RgNLineVCompound();
-        visIso = hlrToShape.IsoLineVCompound();
-        visOutline = hlrToShape.OutLineVCompound();
-        
+        extractEdges(HLREdgeType::Hard, true, visHard, m_visHardTopoNames);
+        extractEdges(HLREdgeType::Smooth, true, visSmooth, m_visSmoothTopoNames);
+        extractEdges(HLREdgeType::Seam, true, visSeam, m_visSeamTopoNames);
+        extractEdges(HLREdgeType::Iso, true, visIso, m_visIsoTopoNames);
+        extractEdges(HLREdgeType::Outline, true, visOutline, m_visOutlineTopoNames);
+
         // All hidden edges
-        hidHard = hlrToShape.HCompound();
-        hidSmooth = hlrToShape.Rg1LineHCompound();
-        hidSeam = hlrToShape.RgNLineHCompound();
-        hidIso = hlrToShape.IsoLineHCompound();
-        hidOutline = hlrToShape.OutLineHCompound();
-
-        // For every edge in the input shape, we need to find the edge segments that are related
-        TopExp_Explorer edgeExp(inShape, TopAbs_EDGE);
-        int index = 1;
-        for (; edgeExp.More(); edgeExp.Next()) {
-            const TopoDS_Shape& edge = edgeExp.Current();
-
-            // By adding edge as the input we get the edge segments related to the edge
-            bindShapesTo3d(m_visHardTopoNames, hlrToShape.VCompound(edge), edge, index);
-            bindShapesTo3d(m_visSmoothTopoNames, hlrToShape.Rg1LineVCompound(edge), edge, index);
-            bindShapesTo3d(m_visSeamTopoNames, hlrToShape.RgNLineVCompound(edge), edge, index);
-            bindShapesTo3d(m_hidHardTopoNames, hlrToShape.HCompound(edge), edge, index);
-            bindShapesTo3d(m_hidSmoothTopoNames, hlrToShape.Rg1LineHCompound(edge), edge, index);
-            bindShapesTo3d(m_hidSeamTopoNames, hlrToShape.RgNLineHCompound(edge), edge, index);
-            index++;
-        }
-
-        // using the outlined shape we can get the faces that are visible and hidden
-        // this is better than using the input shape because the HLR algo will create new faces for the outline
-        TopoDS_Shape outlinedShape = brep_hlr->ShapeBounds(1).Shape()->OutLinedShape();
-        TopExp_Explorer faceExp(outlinedShape, TopAbs_FACE);
-        index = 1;
-        for (; faceExp.More(); faceExp.Next()) {
-            const TopoDS_Shape& face = faceExp.Current();
-            // Same here. By adding the face as the input we get the edges related to the face
-            // Mostly silhuettes around cylinders, cones etc.
-            bindShapesTo3d(m_visOutlineTopoNames, hlrToShape.OutLineVCompound(face), face, index);
-            bindShapesTo3d(m_hidOutlineTopoNames, hlrToShape.OutLineHCompound(face), face, index);
-            bindShapesTo3d(m_visIsoTopoNames, hlrToShape.IsoLineVCompound(face), face, index);
-            bindShapesTo3d(m_hidIsoTopoNames, hlrToShape.IsoLineHCompound(face), face, index);
-            index++;
-        }
-
-        // This might all seem weird, but the HLR algo does not match all edges to the input shape
-        // For some reason it will create "Orphan" edges that it does not know where came from
-        // This only happens for complex shapes like impellers etc. However this can make a mismatch
-        // Between the number of edges in the TopoDS_Shape list and the edges in EdgeSegment list
-        // This merges the list so they become the same length
-        m_visHardTopoNames = mergeSegmentLists(visHard, m_visHardTopoNames);
-        m_visSmoothTopoNames = mergeSegmentLists(visSmooth, m_visSmoothTopoNames);
-        m_visSeamTopoNames = mergeSegmentLists(visSeam, m_visSeamTopoNames);
-        m_visIsoTopoNames = mergeSegmentLists(visIso, m_visIsoTopoNames);
-        m_visOutlineTopoNames = mergeSegmentLists(visOutline, m_visOutlineTopoNames);
-        m_hidHardTopoNames = mergeSegmentLists(hidHard, m_hidHardTopoNames);
-        m_hidSmoothTopoNames = mergeSegmentLists(hidSmooth, m_hidSmoothTopoNames);
-        m_hidSeamTopoNames = mergeSegmentLists(hidSeam, m_hidSeamTopoNames);
-        m_hidIsoTopoNames = mergeSegmentLists(hidIso, m_hidIsoTopoNames);
-        m_hidOutlineTopoNames = mergeSegmentLists(hidOutline, m_hidOutlineTopoNames);
+        extractEdges(HLREdgeType::Hard, false, hidHard, m_hidHardTopoNames);
+        extractEdges(HLREdgeType::Smooth, false, hidSmooth, m_hidSmoothTopoNames);
+        extractEdges(HLREdgeType::Seam, false, hidSeam, m_hidSeamTopoNames);
+        extractEdges(HLREdgeType::Iso, false, hidIso, m_hidIsoTopoNames);
+        extractEdges(HLREdgeType::Outline, false, hidOutline, m_hidOutlineTopoNames);
 
         buildAndInvert(visHard);
         buildAndInvert(visSmooth);
@@ -287,73 +244,60 @@ void GeometryObject::buildAndInvert(TopoDS_Shape& shape)
     }
 }
 
-void GeometryObject::bindShapesTo3d(std::vector<EdgeSegment>& segmentList, const TopoDS_Shape& shape, 
-                                    const TopoDS_Shape& source, int index)
+
+std::vector<TechDraw::GeometryObject::EdgeSegment>
+GeometryObject::buildSegmentsFromTagged(const std::vector<HLREdge>& hlrEdges,
+                                        const TopTools_IndexedMapOfShape& edgeMap,
+                                        const TopTools_IndexedMapOfShape& faceMap)
 {
-    if (shape.IsNull()) {
-        return;
-    }
+    std::vector<EdgeSegment> segments;
+    segments.reserve(hlrEdges.size());
 
-    std::string mappedName;
-    std::string parentName;
+    std::map<std::string, int> segmentCounter;
 
-    if (source.ShapeType() == TopAbs_EDGE) {
-        parentName = "Edge" + std::to_string(index);
-
-        Data::MappedName mapped = m_partShape.getMappedName(
-            Data::IndexedName::fromConst("Edge", index), false);
-        mappedName = mapped.toString();
-    }
-    else if (source.ShapeType() == TopAbs_FACE) {
-        parentName = "Face" + std::to_string(index);
-
-        Data::MappedName mapped = m_partShape.getMappedName(
-            Data::IndexedName::fromConst("Face", index), false);
-        mappedName = mapped.toString();
-    }
-
-
-    // For every edge in the compound shape
-    // We add the parents name (like "Edge15") the mapped name (the toponaming part)
-    // And the segment number, 1 if it is the only segment from the parent etc.
-    TopExp_Explorer exp(shape, TopAbs_EDGE);
-    std::vector<EdgeSegment> edgeSegments;
-    int segmentNumber = 1;
-    for (; exp.More(); exp.Next()) {
+    // for each edge find the toponame of the source shape and store it in the segment
+    for (const auto& hlrEdge : hlrEdges) {
         EdgeSegment segment;
-        segment.edge = exp.Current();
-        segment.mappedName = mappedName;
-        segment.parentName = parentName;
-        segment.number = segmentNumber;
-        segmentList.push_back(segment);
-        segmentNumber++;
-    }
-}
+        segment.edge = hlrEdge.edge;
+        segment.number = 0;
 
-std::vector<TechDraw::GeometryObject::EdgeSegment> GeometryObject::mergeSegmentLists(TopoDS_Shape compound, std::vector<EdgeSegment> edgeSegments) {
-    std::vector<EdgeSegment> mergedSegments;
-    TopExp_Explorer exp(compound, TopAbs_EDGE);
-    for (; exp.More(); exp.Next()) {
-        const TopoDS_Shape& edge = exp.Current();
-        bool found = false;
-        for (auto& segment : edgeSegments) {
-            if (m_matcher->compareGeometry(edge, segment.edge)) {
-                mergedSegments.push_back(segment);
-                found = true;
-                break;
+        int index = 0;
+        if (hlrEdge.sourceType == "Edge") {
+
+            // since we have the source shape from outliner, we can find the index of the edge in the original shape
+            index = edgeMap.FindIndex(hlrEdge.sourceShape);
+
+            if (index > 0) {
+                segment.parentName = "Edge" + std::to_string(index);
+
+                Data::MappedName mapped = m_partShape.getMappedName(
+                    Data::IndexedName::fromConst("Edge", index), false);
+                segment.mappedName = mapped.toString();
             }
         }
-        if (!found) {
-            // No matching found so just create an empty segment
-            EdgeSegment emptySegment;
-            emptySegment.edge = TopoDS_Shape();
-            emptySegment.mappedName = "";
-            emptySegment.parentName = "";
-            emptySegment.number = 0;
-            mergedSegments.push_back(emptySegment);
+        else if (hlrEdge.sourceType == "Face") {
+
+            index = faceMap.FindIndex(hlrEdge.sourceShape);
+
+            if (index > 0) {
+                segment.parentName = "Face" + std::to_string(index);
+
+                Data::MappedName mapped = m_partShape.getMappedName(
+                    Data::IndexedName::fromConst("Face", index), false);
+                segment.mappedName = mapped.toString();
+            }
         }
+
+        // since multiple edges can come from the same source shape, we also keep track of a segment number
+        if (index > 0) {
+            int count = segmentCounter[segment.parentName]++;
+            segment.number = count + 1;
+        }
+
+        segments.push_back(segment);
     }
-    return mergedSegments;
+
+    return segments;
 }
 
 //convert the hlr output into TD Geometry
@@ -451,70 +395,7 @@ void GeometryObject::projectShapeWithPolygonAlgo(const Part::TopoShape& input, c
     }
 
     try {
-        HLRBRep_PolyHLRToShape polyhlrToShape;
-        polyhlrToShape.Update(brep_hlrPoly);
-
-        // All visible edges
-        visHard = polyhlrToShape.VCompound();
-        visSmooth = polyhlrToShape.Rg1LineVCompound();
-        visSeam = polyhlrToShape.RgNLineVCompound();
-        visOutline = polyhlrToShape.OutLineVCompound();
         
-        // All hidden edges
-        hidHard = polyhlrToShape.HCompound();
-        hidSmooth = polyhlrToShape.Rg1LineHCompound();
-        hidSeam = polyhlrToShape.RgNLineHCompound();
-        hidOutline = polyhlrToShape.OutLineHCompound();
-
-        // For every edge in the input shape, we need to find the edge segments that are related
-        TopExp_Explorer edgeExp(inShape, TopAbs_EDGE);
-        int index = 1;
-        for (; edgeExp.More(); edgeExp.Next()) {
-            const TopoDS_Shape& edge = edgeExp.Current();
-
-            // By adding edge as the input we get the edge segments related to the edge
-            bindShapesTo3d(m_visHardTopoNames, polyhlrToShape.VCompound(edge), edge, index);
-            bindShapesTo3d(m_visSmoothTopoNames, polyhlrToShape.Rg1LineVCompound(edge), edge, index);
-            bindShapesTo3d(m_visSeamTopoNames, polyhlrToShape.RgNLineVCompound(edge), edge, index);
-            bindShapesTo3d(m_hidHardTopoNames, polyhlrToShape.HCompound(edge), edge, index);
-            bindShapesTo3d(m_hidSmoothTopoNames, polyhlrToShape.Rg1LineHCompound(edge), edge, index);
-            bindShapesTo3d(m_hidSeamTopoNames, polyhlrToShape.RgNLineHCompound(edge), edge, index);
-            index++;
-        }
-
-        TopExp_Explorer faceExp(inShape, TopAbs_FACE);
-        index = 1;
-        for (; faceExp.More(); faceExp.Next()) {
-            const TopoDS_Shape& face = faceExp.Current();
-            // Same here. By adding the face as the input we get the edges related to the face
-            // Mostly silhuettes around cylinders, cones etc.
-            bindShapesTo3d(m_visOutlineTopoNames, polyhlrToShape.OutLineVCompound(face), face, index);
-            bindShapesTo3d(m_hidOutlineTopoNames, polyhlrToShape.OutLineHCompound(face), face, index);
-            index++;
-        }
-
-        // This might all seem weird, but the HLR algo does not match all edges to the input shape
-        // For some reason it will create "Orphan" edges that it does not know where came from
-        // This only happens for complex shapes like impellers etc. However this can make a mismatch
-        // Between the number of edges in the TopoDS_Shape list and the edges in EdgeSegment list
-        // This merges the list so they become the same length
-        m_visHardTopoNames = mergeSegmentLists(visHard, m_visHardTopoNames);
-        m_visSmoothTopoNames = mergeSegmentLists(visSmooth, m_visSmoothTopoNames);
-        m_visSeamTopoNames = mergeSegmentLists(visSeam, m_visSeamTopoNames);
-        m_visOutlineTopoNames = mergeSegmentLists(visOutline, m_visOutlineTopoNames);
-        m_hidHardTopoNames = mergeSegmentLists(hidHard, m_hidHardTopoNames);
-        m_hidSmoothTopoNames = mergeSegmentLists(hidSmooth, m_hidSmoothTopoNames);
-        m_hidSeamTopoNames = mergeSegmentLists(hidSeam, m_hidSeamTopoNames);
-        m_hidOutlineTopoNames = mergeSegmentLists(hidOutline, m_hidOutlineTopoNames);
-
-        buildAndInvert(visHard);
-        buildAndInvert(visSmooth);
-        buildAndInvert(visSeam);
-        buildAndInvert(visOutline);
-        buildAndInvert(hidHard);
-        buildAndInvert(hidSmooth);
-        buildAndInvert(hidSeam);
-        buildAndInvert(hidOutline);
     }
     catch (const Standard_Failure& e) {
         Base::Console().error(

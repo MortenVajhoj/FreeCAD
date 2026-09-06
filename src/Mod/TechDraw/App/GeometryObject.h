@@ -35,6 +35,7 @@
 #include <vector>
 
 #include <HLRAlgo_Projector.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 #include <TopoDS_Shape.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Pnt.hxx>
@@ -44,6 +45,7 @@
 #include <Mod/Part/App/TopoShape.h>
 
 #include "Geometry.h"
+#include "HLRExtractor.h"
 #include "ShapeUtils.h"
 
 
@@ -62,7 +64,6 @@ class BaseGeom;
 class Vector;
 class Face;
 class Vertex;
-class GeometryMatcher;
 
 class TechDrawExport GeometryObject
 {
@@ -99,8 +100,9 @@ public:
     static TopoDS_Shape simpleProjection(const TopoDS_Shape& shape, const gp_Ax2& projCS);
     static TopoDS_Shape projectFace(const TopoDS_Shape& face, const gp_Ax2& CS);
     void makeTDGeometry();
-    void bindShapesTo3d(std::vector<EdgeSegment>& segmentList, const TopoDS_Shape& shape, const TopoDS_Shape& source, int index);
-    std::vector<EdgeSegment> mergeSegmentLists(TopoDS_Shape compound, std::vector<EdgeSegment> edgeSegments);
+    std::vector<EdgeSegment> buildSegmentsFromTagged(const std::vector<HLREdge>& hlrEdges,
+                                                      const TopTools_IndexedMapOfShape& edgeMap,
+                                                      const TopTools_IndexedMapOfShape& faceMap);
     void buildAndInvert(TopoDS_Shape& shape);
     void extractGeometry(EdgeClass category, bool visible);
     void addFaceGeom(FacePtr f);
@@ -193,7 +195,6 @@ protected:
     double m_focus;
     bool m_usePolygonHLR;
     int m_scrubCount;
-    GeometryMatcher* m_matcher;
 };
 
 using GeometryObjectPtr = std::shared_ptr<GeometryObject>;
