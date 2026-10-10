@@ -219,7 +219,7 @@ TopoDS_Shape DrawComplexSection::makeCuttingTool(double dMax)
     return cuttingTool;
 }
 
-TopoDS_Shape DrawComplexSection::getShapeToPrepare() const
+Part::TopoShape DrawComplexSection::getShapeToPrepare() const
 {
     if (ProjectionStrategy.getValue() == 0) {
         //Offset. Use regular section behaviour
@@ -230,7 +230,7 @@ TopoDS_Shape DrawComplexSection::getShapeToPrepare() const
 }
 
 //get the shape ready for projection and cut surface finding
-TopoDS_Shape DrawComplexSection::prepareShape(const TopoDS_Shape& cutShape, double shapeSize)
+Part::TopoShape DrawComplexSection::prepareShape(const Part::TopoShape& cutShape, double shapeSize)
 {
     if (ProjectionStrategy.getValue() == 0) {
         //Offset. Use regular section behaviour
@@ -258,7 +258,7 @@ TopoDS_Shape DrawComplexSection::prepareShape(const TopoDS_Shape& cutShape, doub
 }
 
 
-void DrawComplexSection::makeSectionCut(const TopoDS_Shape& baseShape)
+void DrawComplexSection::makeSectionCut(const Part::TopoShape& baseShape)
 {
     if (ProjectionStrategy.getValue() == 0) {
         //Offset. Use regular section behaviour
@@ -273,7 +273,7 @@ void DrawComplexSection::makeSectionCut(const TopoDS_Shape& baseShape)
         // We create a lambda closure to hold a copy of baseShape.
         // This is important because this variable might be local to the calling
         // function and might get destructed before the parallel processing finishes.
-        auto lambda = [this, baseShape]{this->makeAlignedPieces(baseShape);};
+        auto lambda = [this, baseShape]{this->makeAlignedPieces(baseShape.getShape());};
         m_alignFuture = QtConcurrent::run(std::move(lambda));
         m_alignWatcher.setFuture(m_alignFuture);
         waitingForAlign(true);
@@ -566,7 +566,7 @@ TopoDS_Shape DrawComplexSection::getShapeToIntersect()
     return m_preparedShape;
 }
 
-TopoDS_Shape DrawComplexSection::getShapeForDetail() const
+Part::TopoShape DrawComplexSection::getShapeForDetail() const
 {
     if (ProjectionStrategy.getValue() == 0) {//Offset
         return DrawViewSection::getShapeForDetail();

@@ -157,6 +157,12 @@ class TechDrawExport BaseGeom : public std::enable_shared_from_this<BaseGeom>, p
         void setOCCEdge(const TopoDS_Edge& newEdge)  { occEdge = newEdge; }
         bool getCosmetic() const  { return cosmetic; }
         void setCosmetic (bool state)  { cosmetic = state; }
+        std::string getMappedName() const { return mappedName; }
+        void setMappedName(std::string name) { mappedName = name; }
+        int getSegmentNumber() const { return segmentNumber; }
+        void setSegmentNumber(int index) { segmentNumber = index; }
+        int getGeometryIndex() const { return m_geometryIndex; }
+        void setGeometryIndex(int index) { m_geometryIndex = index; }
         SourceType source() { return m_source; }
         void source(SourceType s) { m_source = s; }
         int sourceIndex() const { return m_sourceIndex; }
@@ -185,6 +191,9 @@ protected:
         SourceType m_source;
         int m_sourceIndex;
         std::string cosmeticTag;
+        std::string mappedName;
+        int segmentNumber = 0;
+        int m_geometryIndex = -1;
 //NOLINTEND (misc-non-private-member-variables-in-classes)
 };
 using BaseGeomPtrVector = std::vector<BaseGeomPtr>;    //new style
@@ -423,6 +432,12 @@ class TechDrawExport Vertex : public TechDraw::Tag
         void setCosmeticTag(const std::string& t) { cosmeticTag = t; }
         bool isCenter() const {return m_center;}
         void isCenter(bool state) { m_center = state; }
+        std::vector<std::string> getMappedNames() const { return m_mappedNames; }
+        void setMappedNames(std::string name) { m_mappedNames.push_back(name); }
+        std::vector<int> getSegmentNumbers() const { return m_segmentNumbers; }
+        void setSegmentNumbers(int index) { m_segmentNumbers.push_back(index); }
+        int getGeometryIndex() const { return m_geometryIndex; }
+        void setGeometryIndex(int index) { m_geometryIndex = index; }
         bool isReference() const { return m_reference; }
         void isReference(bool state) { m_reference = state; }
 
@@ -443,6 +458,9 @@ class TechDrawExport Vertex : public TechDraw::Tag
         int cosmeticLink;                 //deprec. use cosmeticTag
         std::string cosmeticTag;
         bool m_reference;                   //reference vertex (ex robust dimension)
+        std::vector<std::string> m_mappedNames;
+        std::vector<int> m_segmentNumbers;
+        int m_geometryIndex = -1;
 //NOLINTEND (misc-non-private-member-variables-in-classes)
 };
 using VertexPtr = std::shared_ptr<Vertex>;

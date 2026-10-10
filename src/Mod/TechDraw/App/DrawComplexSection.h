@@ -66,7 +66,7 @@ public:
 //NOLINTEND
 
     TopoDS_Shape makeCuttingTool(double dMax) override;
-    void makeSectionCut(const TopoDS_Shape& baseShape) override;
+    void makeSectionCut(const Part::TopoShape& baseShape) override;
     TopoDS_Wire closeProfileForCut(const TopoDS_Wire& profileWire,
                                    double dMax) const;
     TopoDS_Shape makeCuttingToolFromClosedProfile(const TopoDS_Wire& profileWire, double dMax);
@@ -94,8 +94,8 @@ public:
     TopoDS_Compound singleToolIntersections(const TopoDS_Shape& cutShape);
     TopoDS_Compound alignedToolIntersections(const TopoDS_Shape& cutShape);
 
-    TopoDS_Shape prepareShape(const TopoDS_Shape& cutShape, double shapeSize) override;
-    TopoDS_Shape getShapeToPrepare() const override;
+    Part::TopoShape prepareShape(const Part::TopoShape& cutShape, double shapeSize) override;
+    Part::TopoShape getShapeToPrepare() const override;
 
     gp_Pln getSectionPlane() const override;
     gp_Ax2 getCSFromBase(const std::string& sectionName) const override;
@@ -122,7 +122,7 @@ public:
     void waitingForAlign(bool s) { m_waitingForAlign = s; }
     bool waitingForAlign() const { return m_waitingForAlign; }
 
-    TopoDS_Shape getShapeForDetail() const override;
+    Part::TopoShape getShapeForDetail() const override;
 
     static std::pair<Base::Vector3d, Base::Vector3d> getSegmentEnds(const TopoDS_Edge& segment);
     static std::pair<Base::Vector3d, Base::Vector3d> getWireEnds(const TopoDS_Wire& wire);
