@@ -38,11 +38,13 @@
 
 
 #include <BOPAlgo_Builder.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepAlgo_NormalProjection.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepTools.hxx>
@@ -171,6 +173,20 @@ DrawViewPart::DrawViewPart()
                       "Mapped names of the saved vertices");
     ADD_PROPERTY_TYPE(SavedVertexSegmentNumbers, (), namingGroup, namingType,
                       "Segment numbers for the saved vertices");
+    ADD_PROPERTY_TYPE(SavedFaceIndices, (), namingGroup, namingType,
+                      "Indices of the saved faces");
+    ADD_PROPERTY_TYPE(SavedFaceMappedNames, (), namingGroup, namingType,
+                      "Mapped names of the edges around the saved faces");
+    ADD_PROPERTY_TYPE(SavedFaceSegmentNumbers, (), namingGroup, namingType,
+                      "Segment numbers of the edges around the saved faces");
+    ADD_PROPERTY_TYPE(SavedCosmeticEdgeTags, (), namingGroup, namingType,
+                      "Cosmetic tags of the saved cosmetic edges");
+    ADD_PROPERTY_TYPE(SavedCosmeticEdgeIndices, (), namingGroup, namingType,
+                      "Indices of the saved cosmetic edges");
+    ADD_PROPERTY_TYPE(SavedCosmeticVertexTags, (), namingGroup, namingType,
+                      "Cosmetic tags of the saved cosmetic vertices");
+    ADD_PROPERTY_TYPE(SavedCosmeticVertexIndices, (), namingGroup, namingType,
+                      "Indices of the saved cosmetic vertices");
 
     //initialize bbox to non-garbage
     bbox = Base::BoundBox3d(Base::Vector3d(0.0, 0.0, 0.0), 0.0);
@@ -232,10 +248,10 @@ void DrawViewPart::addPoints()
 {
 //    Base::Console().message("DVP::addPoints()\n");
     // get all the 2d shapes in the sources, then pick through them for vertices.
-    std::vector<TopoDS_Shape> shapesAll = ShapeExtractor::getShapes2d(getAllSources());
+    std::vector<Part::TopoShape> shapesAll = ShapeExtractor::getShapes2d(getAllSources());
     for (auto& shape : shapesAll) {
-        if (shape.ShapeType() == TopAbs_VERTEX) {
-            gp_Pnt gp = BRep_Tool::Pnt(TopoDS::Vertex(shape));
+        if (shape.shapeType() == TopAbs_VERTEX) {
+            gp_Pnt gp = BRep_Tool::Pnt(TopoDS::Vertex(shape.getShape()));
             Base::Vector3d vp(gp.X(), gp.Y(), gp.Z());
             vp = vp - m_saveCentroid;
             //need to offset the point to match the big projection
@@ -342,10 +358,10 @@ GeometryObjectPtr DrawViewPart::makeGeometryForShape(const Part::TopoShape& shap
 
     gp_Pnt gCentroid = ShapeUtils::findCentroid(localShape, getProjectionCS());
     m_saveCentroid = Base::convertTo<Base::Vector3d>(gCentroid);
-    m_saveShape = ShapeUtils::centerShape(localShape, m_saveCentroid);
+    m_saveShape = ShapeUtils::centerShape(shape, m_saveCentroid);
 
     // build from the source TopoShape so the element map survives into the HLR result
-    Part::TopoShape mappedShape = scaleAndRotate(ShapeUtils::centerShape(shape, m_saveCentroid));
+    Part::TopoShape mappedShape = scaleAndRotate(m_saveShape);
 
     return buildGeometryObject(mappedShape, getProjectionCS());
 }
@@ -375,7 +391,7 @@ Part::TopoShape DrawViewPart::scaleAndRotate(const Part::TopoShape& input) const
 
 TopoDS_Shape DrawViewPart::getShapeForGeometryBuild() const
 {
-    return scaleAndRotate(m_saveShape);
+    return scaleAndRotate(m_saveShape).getShape();
 }
 
 TechDraw::GeometryObjectPtr DrawViewPart::buildGeometryObject(const Part::TopoShape& shape,
@@ -445,10 +461,10 @@ void DrawViewPart::onHlrFinished()
     QObject::disconnect(connectHlrWatcher);
     showProgressMessage(getNameInDocument(), "has finished finding hidden lines");
 
-    postHlrTasks();//application level tasks that depend on HLR/GO being complete
-
     setEdgeIndices();
     setVertexIndices();
+
+    postHlrTasks();//application level tasks that depend on HLR/GO being complete
 
     //start face finding in a separate thread.  We don't find faces when using the polygon
     //HLR method.
@@ -527,6 +543,9 @@ void DrawViewPart::setEdgeIndices()
         if (edge->getGeometryIndex() >= 0) {
             usedIndices.insert(edge->getGeometryIndex());
         }
+    }
+    for (long index : SavedCosmeticEdgeIndices.getValues()) {
+        usedIndices.insert(index);
     }
 
     // Assign a new index to everything that was not matched
@@ -626,6 +645,9 @@ void DrawViewPart::setVertexIndices()
             usedIndices.insert(vertex->getGeometryIndex());
         }
     }
+    for (long index : SavedCosmeticVertexIndices.getValues()) {
+        usedIndices.insert(index);
+    }
 
     long nextIndex = 0;
     for (auto& vertex : vertices) {
@@ -658,6 +680,114 @@ void DrawViewPart::setVertexIndices()
     SavedVertexIndices.setValues(savedIndices);
     SavedVertexMappedNames.setValues(savedNames);
     SavedVertexSegmentNumbers.setValues(savedSegments);
+}
+
+void DrawViewPart::setFaceIndices()
+{
+    if (!geometryObject) {
+        return;
+    }
+
+    const std::vector<FacePtr>& faces = geometryObject->getFaceGeometry();
+    if (faces.empty()) {
+        return;
+    }
+
+    std::vector<long> savedIndices = SavedFaceIndices.getValues();
+    std::vector<std::string> savedNames = SavedFaceMappedNames.getValues();
+    std::vector<long> savedSegments = SavedFaceSegmentNumbers.getValues();
+
+    size_t savedCount = std::min({savedIndices.size(), savedNames.size(), savedSegments.size()});
+    const Part::TopoShape& partShape = geometryObject->getPartShape();
+
+    std::map<long, std::vector<size_t>> savedFaces;
+    for (size_t row = 0; row < savedCount; row++) {
+        savedFaces[savedIndices[row]].push_back(row);
+    }
+
+    struct FaceMatch
+    {
+        double score;
+        size_t face;
+        long savedIndex;
+    };
+    constexpr double minimumScore = 0.5;
+    std::vector<FaceMatch> matches;
+
+    for (size_t iFace = 0; iFace < faces.size(); iFace++) {
+        faces[iFace]->setGeometryIndex(-1);
+
+        const std::vector<std::string> names = faces[iFace]->getMappedNames();
+        const std::vector<int> segments = faces[iFace]->getSegmentNumbers();
+        if (names.empty()) {
+            continue;
+        }
+
+        for (auto& [savedIndex, rows] : savedFaces) {
+            int common = 0;
+            for (size_t i = 0; i < names.size(); i++) {
+                for (size_t row : rows) {
+                    if (matchElements(partShape, names[i], segments[i],
+                                      savedNames[row], savedSegments[row])) {
+                        common++;
+                        break;
+                    }
+                }
+            }
+
+            double score = 2.0 * common / static_cast<double>(names.size() + rows.size());
+            if (score >= minimumScore) {
+                matches.push_back({score, iFace, savedIndex});
+            }
+        }
+    }
+
+    // take the best matches first, so a face can not take the index of a neighbour that fits better
+    std::stable_sort(matches.begin(), matches.end(), [](const FaceMatch& a, const FaceMatch& b) {
+        return a.score > b.score;
+    });
+
+    std::set<long> usedIndices;
+    for (auto& match : matches) {
+        if (faces[match.face]->getGeometryIndex() >= 0 || usedIndices.contains(match.savedIndex)) {
+            continue;
+        }
+        faces[match.face]->setGeometryIndex(static_cast<int>(match.savedIndex));
+        usedIndices.insert(match.savedIndex);
+    }
+
+    // Assign a new index to everything that was not matched
+    long nextIndex = 0;
+    for (auto& face : faces) {
+        if (face->getGeometryIndex() >= 0) {
+            continue;
+        }
+        while (usedIndices.contains(nextIndex)) {
+            ++nextIndex;
+        }
+        face->setGeometryIndex(static_cast<int>(nextIndex));
+        usedIndices.insert(nextIndex);
+    }
+
+    // Save it for the next time
+    savedIndices.clear();
+    savedNames.clear();
+    savedSegments.clear();
+
+    for (auto& face : faces) {
+        const std::vector<std::string> mappedNames = face->getMappedNames();
+        const std::vector<int> segments = face->getSegmentNumbers();
+
+        for (size_t i = 0; i < mappedNames.size(); i++) {
+            savedIndices.push_back(face->getGeometryIndex());
+            savedNames.push_back(mappedNames[i]);
+            savedSegments.push_back(segments[i]);
+        }
+    }
+
+    SavedFaceIndices.setValues(savedIndices);
+    SavedFaceMappedNames.setValues(savedNames);
+    SavedFaceSegmentNumbers.setValues(savedSegments);
 }
 
 bool DrawViewPart::matchElements(const Part::TopoShape& partShape,
@@ -718,7 +848,8 @@ void DrawViewPart::postHlrTasks()
     }
 
     // rescale if view doesn't fit on page
-    if (ScaleType.isValue("Automatic") && !checkFit()) {
+    if (ScaleType.isValue("Automatic") && !checkFit()
+        && !isDerivedFrom<DrawViewSection>() && !isDerivedFrom<DrawViewDetail>()) {
         double newScale = autoScale();
         Scale.setValue(newScale);
         Part::TopoShape saveShape(m_saveShape);
@@ -779,6 +910,72 @@ void DrawViewPart::extractFaces()
             Base::Console().warning("DVP::extractFaces - Unsupported algorithm id %d\n",
                                     static_cast<int>(Preferences::faceFinderVersion()));
             return;
+    }
+
+    addFaceEdgeNames(goEdges);
+}
+
+//! a face does not have a name in the source shape, so it is named by the projected edges around it.
+//! The face finders split and copy the edges, so each face edge is matched back to the projected
+//! edge it lies on.
+void DrawViewPart::addFaceEdgeNames(const std::vector<BaseGeomPtr>& goEdges)
+{
+    if (!geometryObject) {
+        return;
+    }
+
+    // only the named edges can name a face. Keep a box for each so we only measure the distance
+    // to the edges that are close
+    const double tolerance = FUZZYADJUST * EWTOLERANCE;
+    std::vector<BaseGeomPtr> namedEdges;
+    std::vector<Bnd_Box> namedBoxes;
+    for (auto& edge : goEdges) {
+        if (edge->getMappedName().empty()) {
+            continue;
+        }
+        Bnd_Box box;
+        BRepBndLib::AddOptimal(edge->getOCCEdge(), box);
+        box.SetGap(tolerance);
+        namedEdges.push_back(edge);
+        namedBoxes.push_back(box);
+    }
+    if (namedEdges.empty()) {
+        return;
+    }
+
+    for (auto& face : geometryObject->getFaceGeometry()) {
+        // an edge can be split into several pieces around the same face, so only keep it once
+        std::set<std::pair<std::string, int>> faceNames;
+
+        for (auto& wire : face->wires) {
+            for (auto& geom : wire->geoms) {
+                const TopoDS_Edge& faceEdge = geom->getOCCEdge();
+                if (faceEdge.IsNull()) {
+                    continue;
+                }
+
+                BRepAdaptor_Curve adapt(faceEdge);
+                gp_Pnt midPoint = adapt.Value((adapt.FirstParameter() + adapt.LastParameter()) / 2.0);
+                TopoDS_Vertex midVertex = BRepBuilderAPI_MakeVertex(midPoint);
+
+                for (size_t index = 0; index < namedEdges.size(); index++) {
+                    if (namedBoxes[index].IsOut(midPoint)) {
+                        continue;
+                    }
+                    double distance = DU::simpleMinDist(midVertex, namedEdges[index]->getOCCEdge());
+                    if (distance >= 0.0 && distance < tolerance) {
+                        faceNames.emplace(namedEdges[index]->getMappedName(),
+                                          namedEdges[index]->getSegmentNumber());
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (auto& [name, segment] : faceNames) {
+            face->setMappedNames(name);
+            face->setSegmentNumbers(segment);
+        }
     }
 }
 
@@ -1059,6 +1256,8 @@ void DrawViewPart::onFacesFinished()
     QObject::disconnect(connectFaceWatcher);
     showProgressMessage(getNameInDocument(), "has finished extracting faces");
 
+    setFaceIndices();
+
     // Now we can recompute Dimensions and do other tasks possibly depending on Face extraction
     postFaceExtractionTasks();
 
@@ -1234,16 +1433,7 @@ TechDraw::BaseGeomPtr DrawViewPart::getEdge(std::string edgeName) const
 //! TechDraw face names run from 0 to n-1
 TechDraw::FacePtr DrawViewPart::getFace(std::string faceName) const
 {
-    const std::vector<TechDraw::FacePtr>& faces = getFaceGeometry();
-    if (faces.empty()) {
-        //should not happen
-        return nullptr;
-    }
-    size_t iFace = DrawUtil::getIndexFromName(faceName);
-    if (iFace >= faces.size()) {
-        return nullptr;
-    }
-    return faces.at(iFace);
+    return getFaceByIndex(DrawUtil::getIndexFromName(faceName));
 }
 
 
@@ -1303,12 +1493,22 @@ TechDraw::VertexPtr DrawViewPart::getProjVertexByCosTag(std::string cosTag)
 
 
 //! returns existing geometry of 2D Face(idx)
+TechDraw::FacePtr DrawViewPart::getFaceByIndex(int idx) const
+{
+    for (auto& face : getFaceGeometry()) {
+        if (face->getGeometryIndex() == idx) {
+            return face;
+        }
+    }
+    return nullptr;
+}
+
+//! returns the edges of 2D Face(idx)
 std::vector<TechDraw::BaseGeomPtr> DrawViewPart::getFaceEdgesByIndex(int idx) const
 {
     std::vector<TechDraw::BaseGeomPtr> result;
-    const std::vector<TechDraw::FacePtr>& faces = getFaceGeometry();
-    if (idx < (int)faces.size()) {
-        TechDraw::FacePtr projFace = faces.at(idx);
+    TechDraw::FacePtr projFace = getFaceByIndex(idx);
+    if (projFace) {
         for (auto& w : projFace->wires) {
             for (auto& g : w->geoms) {
                 if (g->getCosmetic()) {
@@ -1328,8 +1528,10 @@ std::vector<TopoDS_Wire> DrawViewPart::getWireForFace(int idx) const
 {
     std::vector<TopoDS_Wire> result;
     std::vector<TopoDS_Edge> edges;
-    const std::vector<TechDraw::FacePtr>& faces = getFaceGeometry();
-    TechDraw::FacePtr ourFace = faces.at(idx);
+    TechDraw::FacePtr ourFace = getFaceByIndex(idx);
+    if (!ourFace) {
+        return result;
+    }
     for (auto& w : ourFace->wires) {
         edges.clear();
         for (auto& g : w->geoms) {
@@ -1838,9 +2040,9 @@ void DrawViewPart::updateReferenceVert(std::string tag, Base::Vector3d loc2d)
 
 void DrawViewPart::addReferencesToGeom()
 {
-    std::vector<TechDraw::VertexPtr> gVerts = getVertexGeometry();
-    gVerts.insert(gVerts.end(), m_referenceVerts.begin(), m_referenceVerts.end());
-    getGeometryObject()->setVertexGeometry(gVerts);
+    for (auto& ref : m_referenceVerts) {
+        getGeometryObject()->addVertex(ref);
+    }
 }
 
 //add a vertex that is not part of the geometry, but is used by

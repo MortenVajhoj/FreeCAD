@@ -473,16 +473,14 @@ ReferenceEntry DimensionAutoCorrect::searchViewForVert(DrawViewPart* obj,
     std::vector<TechDraw::VertexPtr> gVertexAll =
         getDimension()->getViewPart()->getVertexGeometry();
     getMatcher()->setPointTolerance(EWTOLERANCE);
-    int iVertex = 0;
     for (auto& vert : gVertexAll) {
         // vert is in display form - scaled and rotated
         Part::TopoShape temp = ReferenceEntry::asCanonicalTopoShape(vert->asTopoShape(), *obj);
         bool isSame = getMatcher()->compareGeometry(temp, refVertex);
         if (isSame) {
-            auto newSubname = std::string("Vertex") + std::to_string(iVertex);
+            auto newSubname = std::string("Vertex") + std::to_string(vert->getGeometryIndex());
             return {obj, newSubname, getDimension()->getDocument()};
         }
-        iVertex++;
     }
     return {};
 }
@@ -493,17 +491,15 @@ ReferenceEntry DimensionAutoCorrect::searchViewForExactEdge(DrawViewPart* obj,
 {
     // Base::Console().message("DAC::searchViewForExactEdge()\n");
     auto gEdgeAll = getDimension()->getViewPart()->getEdgeGeometry();
-    int iEdge {0};
     for (auto& edge : gEdgeAll) {
         // edge is scaled and rotated. we need it in the same scale/rotate state as
         // the reference edge in order to match.
         Part::TopoShape temp = ReferenceEntry::asCanonicalTopoShape(edge->asTopoShape(), *obj);
         bool isSame = getMatcher()->compareGeometry(refEdge, temp);
         if (isSame) {
-            auto newSubname = std::string("Edge") + std::to_string(iEdge);
+            auto newSubname = std::string("Edge") + std::to_string(edge->getGeometryIndex());
             return {obj, newSubname, getDimension()->getDocument()};
         }
-        iEdge++;
     }
     return {};
 }

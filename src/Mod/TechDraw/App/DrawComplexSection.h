@@ -40,12 +40,12 @@ namespace TechDraw
 class TechDrawExport AlignedSizeResponse
 {
 public:
-    AlignedSizeResponse(const TopoDS_Shape& piece, Base::Vector3d size, double zvalue) :
+    AlignedSizeResponse(const Part::TopoShape& piece, Base::Vector3d size, double zvalue) :
         alignedPiece(piece),
         pieceSize(size),
         zMax(zvalue)    {}
 
-    TopoDS_Shape alignedPiece;
+    Part::TopoShape alignedPiece;
     Base::Vector3d pieceSize;
     double zMax;
 };
@@ -76,7 +76,7 @@ public:
                                        double dMax) const;
 
 
-    void makeAlignedPieces(const TopoDS_Shape& rawShape);
+    void makeAlignedPieces(const Part::TopoShape& rawShape);
     TopoDS_Compound alignSectionFaces(const TopoDS_Shape& faceIntersections) override;
 
 
@@ -89,7 +89,7 @@ public:
     TopoDS_Compound findSectionPlaneIntersections(const TopoDS_Shape& cutShape) override;
     TopoDS_Shape getShapeToIntersect() override;
     bool boxesIntersect(TopoDS_Face& face, TopoDS_Shape& shape);
-    TopoDS_Shape shapeShapeIntersect(const TopoDS_Shape& shape0, const TopoDS_Shape& shape1);
+    Part::TopoShape shapeShapeIntersect(const Part::TopoShape& shape0, const Part::TopoShape& shape1);
     std::vector<TopoDS_Face> faceShapeIntersect(const TopoDS_Face& face, const TopoDS_Shape& shape);
     TopoDS_Compound singleToolIntersections(const TopoDS_Shape& cutShape);
     TopoDS_Compound alignedToolIntersections(const TopoDS_Shape& cutShape);
@@ -151,14 +151,14 @@ private:
 
     // methods refactored out of makeAlignedPieces
     bool getReversers(const gp_Vec& gProfileVector, double& horizReverser, double& verticalReverser);
-    AlignedSizeResponse getAlignedSize(const TopoDS_Shape& pieceRotated, int iPiece) const;
-    TopoDS_Shape cutAndRotatePiece(const TopoDS_Shape& rawShape,
+    AlignedSizeResponse getAlignedSize(const Part::TopoShape& pieceRotated, int iPiece) const;
+    Part::TopoShape cutAndRotatePiece(const Part::TopoShape& rawShape,
                                       const TopoDS_Face& segmentFace,
                                       int iPiece,
                                       Base::Vector3d uOrientedSegmentNormal,
                                       double& pieceVertical);
-    TopoDS_Shape movePieceToPaperPlane(const TopoDS_Shape& piece, double sizeMax);
-    TopoDS_Shape distributePiece(const TopoDS_Shape& piece,
+    Part::TopoShape movePieceToPaperPlane(const Part::TopoShape& piece, double sizeMax);
+    Part::TopoShape distributePiece(const Part::TopoShape& piece,
                            double pieceSize,
                            double verticalDisplace,
                            const gp_Vec& alignmentAxis,
@@ -189,8 +189,8 @@ private:
 
 
     TopoDS_Shape m_toolFaceShape;
-    TopoDS_Shape m_alignResult;
-    TopoDS_Shape m_preparedShape;//saved for detail views
+    Part::TopoShape m_alignResult;
+    Part::TopoShape m_preparedShape;//saved for detail views
 
     QMetaObject::Connection connectAlignWatcher;
     QFutureWatcher<void> m_alignWatcher;

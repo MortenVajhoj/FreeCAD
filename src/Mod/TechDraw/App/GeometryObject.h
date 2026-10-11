@@ -76,7 +76,7 @@ public:
         TopoDS_Shape edge;
         std::string mappedName;
         std::string parentName;
-        int number;
+        int number = 0;
     };
 
     void clear();
@@ -186,6 +186,10 @@ protected:
     std::vector<FacePtr> faceGeom;
 
     bool findVertex(Base::Vector3d v);
+    int nextEdgeIndex() const;
+    int nextVertexIndex() const;
+    int cosmeticEdgeIndex(const std::string& tag);
+    int cosmeticVertexIndex(const std::string& tag);
 
     std::string m_parentName;
     TechDraw::DrawView* m_parent;

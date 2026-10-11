@@ -26,11 +26,13 @@
 //! converting the output for OCC HLR into the BaseGeom intermediate representation.
 
 
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepAlgo_NormalProjection.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepLProp_CLProps.hxx>
 #include <BRepLib.hxx>
@@ -44,7 +46,6 @@
 #include <HLRBRep_Algo.hxx>
 #include <HLRBRep_HLRToShape.hxx>
 #include <HLRBRep_PolyAlgo.hxx>
-#include <HLRBRep_PolyHLRToShape.hxx>
 #include <NCollection_DataMap.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -65,6 +66,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <set>
 
 #include <Base/Console.h>
 #include <Mod/Part/App/PartFeature.h>
@@ -395,7 +397,44 @@ void GeometryObject::projectShapeWithPolygonAlgo(const Part::TopoShape& input, c
     }
 
     try {
-        
+        TopTools_IndexedMapOfShape inputEdgeMap;
+        TopExp::MapShapes(inCopy, TopAbs_EDGE, inputEdgeMap);
+        TopTools_IndexedMapOfShape inputFaceMap;
+        TopExp::MapShapes(inCopy, TopAbs_FACE, inputFaceMap);
+
+        PolyHLRExtractor extractor(brep_hlrPoly);
+
+        auto extractEdges = [&](HLREdgeType type, bool visible, TopoDS_Shape& compound,
+                                std::vector<EdgeSegment>& segments) {
+            std::vector<HLREdge> hlrEdges = extractor.extract(type, visible);
+            compound = extractor.toCompound(hlrEdges);
+            segments = buildSegmentsFromTagged(hlrEdges, inputEdgeMap, inputFaceMap);
+        };
+
+        // All visible edges
+        extractEdges(HLREdgeType::Hard, true, visHard, m_visHardTopoNames);
+        extractEdges(HLREdgeType::Smooth, true, visSmooth, m_visSmoothTopoNames);
+        extractEdges(HLREdgeType::Seam, true, visSeam, m_visSeamTopoNames);
+        extractEdges(HLREdgeType::Iso, true, visIso, m_visIsoTopoNames);
+        extractEdges(HLREdgeType::Outline, true, visOutline, m_visOutlineTopoNames);
+
+        // All hidden edges
+        extractEdges(HLREdgeType::Hard, false, hidHard, m_hidHardTopoNames);
+        extractEdges(HLREdgeType::Smooth, false, hidSmooth, m_hidSmoothTopoNames);
+        extractEdges(HLREdgeType::Seam, false, hidSeam, m_hidSeamTopoNames);
+        extractEdges(HLREdgeType::Iso, false, hidIso, m_hidIsoTopoNames);
+        extractEdges(HLREdgeType::Outline, false, hidOutline, m_hidOutlineTopoNames);
+
+        buildAndInvert(visHard);
+        buildAndInvert(visSmooth);
+        buildAndInvert(visSeam);
+        buildAndInvert(visIso);
+        buildAndInvert(visOutline);
+        buildAndInvert(hidHard);
+        buildAndInvert(hidSmooth);
+        buildAndInvert(hidSeam);
+        buildAndInvert(hidIso);
+        buildAndInvert(hidOutline);
     }
     catch (const Standard_Failure& e) {
         Base::Console().error(
@@ -569,6 +608,18 @@ void GeometryObject::addGeomFromCompound(TopoDS_Shape edgeCompound, EdgeClass ca
                     break;
                 }
             }
+            if (matchedSegment.edge.IsNull()) {
+                BRepAdaptor_Curve adapt(edge);
+                gp_Pnt midPoint = adapt.Value((adapt.FirstParameter() + adapt.LastParameter()) / 2.0);
+                TopoDS_Vertex midVertex = BRepBuilderAPI_MakeVertex(midPoint);
+                for (size_t iOld = 0; iOld < originalEdgeVector.size(); iOld++) {
+                    double distance = DU::simpleMinDist(midVertex, originalEdgeVector.at(iOld));
+                    if (distance >= 0.0 && distance < FUZZYADJUST * EWTOLERANCE) {
+                        matchedSegment = topoNames.at(iOld);
+                        break;
+                    }
+                }
+            }
             edgeSegments.push_back(matchedSegment);
         }
 
@@ -680,9 +731,17 @@ void GeometryObject::addGeomFromCompound(TopoDS_Shape edgeCompound, EdgeClass ca
     }//end TopExp
 }
 
-void GeometryObject::addVertex(TechDraw::VertexPtr v) { vertexGeom.push_back(v); }
+void GeometryObject::addVertex(TechDraw::VertexPtr v)
+{
+    v->setGeometryIndex(nextVertexIndex());
+    vertexGeom.push_back(v);
+}
 
-void GeometryObject::addEdge(TechDraw::BaseGeomPtr bg) { edgeGeom.push_back(bg); }
+void GeometryObject::addEdge(TechDraw::BaseGeomPtr bg)
+{
+    bg->setGeometryIndex(nextEdgeIndex());
+    edgeGeom.push_back(bg);
+}
 
 //********** Cosmetic Vertex ***************************************************
 
@@ -698,7 +757,8 @@ int GeometryObject::addCosmeticVertex(CosmeticVertex* cv)
     v->setCosmetic(true);
     v->setCosmeticTag(cv->getTagAsString());
     v->setHlrVisible(true);
-    int idx = vertexGeom.size();
+    int idx = cosmeticVertexIndex(cv->getTagAsString());
+    v->setGeometryIndex(idx);
     vertexGeom.push_back(v);
     return idx;
 }
@@ -711,7 +771,8 @@ int GeometryObject::addCosmeticVertex(Base::Vector3d pos)
     v->setCosmetic(true);
     v->setCosmeticTag("tbi");//not connected to CV
     v->setHlrVisible(true);
-    int idx = vertexGeom.size();
+    int idx = nextVertexIndex();
+    v->setGeometryIndex(idx);
     vertexGeom.push_back(v);
     return idx;
 }
@@ -722,7 +783,8 @@ int GeometryObject::addCosmeticVertex(Base::Vector3d pos, std::string tagString)
     v->setCosmetic(true);
     v->setCosmeticTag(tagString);//connected to CV
     v->setHlrVisible(true);
-    int idx = vertexGeom.size();
+    int idx = cosmeticVertexIndex(tagString);
+    v->setGeometryIndex(idx);
     vertexGeom.push_back(v);
     return idx;
 }
@@ -740,7 +802,8 @@ int GeometryObject::addCosmeticEdge(CosmeticEdge* ce)
     e->setCosmetic(true);
     e->setCosmeticTag(ce->getTagAsString());
     e->setHlrVisible(true);
-    int idx = edgeGeom.size();
+    int idx = cosmeticEdgeIndex(ce->getTagAsString());
+    e->setGeometryIndex(idx);
     edgeGeom.push_back(e);
     return idx;
 }
@@ -758,7 +821,8 @@ int GeometryObject::addCosmeticEdge(Base::Vector3d start, Base::Vector3d end)
     //    e->cosmeticLink = link;
     e->setCosmeticTag("tbi");
     e->setHlrVisible(true);
-    int idx = edgeGeom.size();
+    int idx = nextEdgeIndex();
+    e->setGeometryIndex(idx);
     edgeGeom.push_back(e);
     return idx;
 }
@@ -774,7 +838,8 @@ int GeometryObject::addCosmeticEdge(Base::Vector3d start, Base::Vector3d end, st
     base->setCosmeticTag(tagString);
     base->source(SourceType::COSMETICEDGE);
     base->setHlrVisible(true);
-    int idx = edgeGeom.size();
+    int idx = cosmeticEdgeIndex(tagString);
+    base->setGeometryIndex(idx);
     edgeGeom.push_back(base);
     return idx;
 }
@@ -787,7 +852,8 @@ int GeometryObject::addCosmeticEdge(TechDraw::BaseGeomPtr base, std::string tagS
     base->source(SourceType::COSMETICEDGE);
     base->setCosmeticTag(tagString);
     base->sourceIndex(-1);
-    int idx = edgeGeom.size();
+    int idx = cosmeticEdgeIndex(tagString);
+    base->setGeometryIndex(idx);
     edgeGeom.push_back(base);
     return idx;
 }
@@ -800,7 +866,8 @@ int GeometryObject::addCenterLine(TechDraw::BaseGeomPtr base, std::string tag)
     base->setCosmeticTag(tag);
     base->source(SourceType::CENTERLINE);
     //    base->sourceIndex(si);     //index into source;
-    int idx = edgeGeom.size();
+    int idx = cosmeticEdgeIndex(tag);
+    base->setGeometryIndex(idx);
     edgeGeom.push_back(base);
     return idx;
 }
@@ -912,5 +979,85 @@ bool GeometryObject::findVertex(Base::Vector3d v)
         }
     }
     return false;
+}
+
+int GeometryObject::nextEdgeIndex() const
+{
+    std::set<long> used;
+    for (auto& edge : edgeGeom) {
+        used.insert(edge->getGeometryIndex());
+    }
+    auto* dvp = dynamic_cast<DrawViewPart*>(m_parent);
+    if (dvp) {
+        for (long index : dvp->SavedCosmeticEdgeIndices.getValues()) {
+            used.insert(index);
+        }
+    }
+    int index = 0;
+    while (used.contains(index)) {
+        index++;
+    }
+    return index;
+}
+
+int GeometryObject::nextVertexIndex() const
+{
+    std::set<long> used;
+    for (auto& vertex : vertexGeom) {
+        used.insert(vertex->getGeometryIndex());
+    }
+    auto* dvp = dynamic_cast<DrawViewPart*>(m_parent);
+    if (dvp) {
+        for (long index : dvp->SavedCosmeticVertexIndices.getValues()) {
+            used.insert(index);
+        }
+    }
+    int index = 0;
+    while (used.contains(index)) {
+        index++;
+    }
+    return index;
+}
+
+int GeometryObject::cosmeticEdgeIndex(const std::string& tag)
+{
+    auto* dvp = dynamic_cast<DrawViewPart*>(m_parent);
+    if (!dvp) {
+        return nextEdgeIndex();
+    }
+    std::vector<std::string> tags = dvp->SavedCosmeticEdgeTags.getValues();
+    std::vector<long> indices = dvp->SavedCosmeticEdgeIndices.getValues();
+    for (size_t i = 0; i < tags.size() && i < indices.size(); i++) {
+        if (tags[i] == tag) {
+            return static_cast<int>(indices[i]);
+        }
+    }
+    int index = nextEdgeIndex();
+    tags.push_back(tag);
+    indices.push_back(index);
+    dvp->SavedCosmeticEdgeTags.setValues(tags);
+    dvp->SavedCosmeticEdgeIndices.setValues(indices);
+    return index;
+}
+
+int GeometryObject::cosmeticVertexIndex(const std::string& tag)
+{
+    auto* dvp = dynamic_cast<DrawViewPart*>(m_parent);
+    if (!dvp) {
+        return nextVertexIndex();
+    }
+    std::vector<std::string> tags = dvp->SavedCosmeticVertexTags.getValues();
+    std::vector<long> indices = dvp->SavedCosmeticVertexIndices.getValues();
+    for (size_t i = 0; i < tags.size() && i < indices.size(); i++) {
+        if (tags[i] == tag) {
+            return static_cast<int>(indices[i]);
+        }
+    }
+    int index = nextVertexIndex();
+    tags.push_back(tag);
+    indices.push_back(index);
+    dvp->SavedCosmeticVertexTags.setValues(tags);
+    dvp->SavedCosmeticVertexIndices.setValues(indices);
+    return index;
 }
 

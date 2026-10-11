@@ -33,6 +33,8 @@
 class HLRBRep_Algo;
 class HLRBRep_Data;
 class HLRBRep_EdgeData;
+class HLRBRep_PolyAlgo;
+class gp_XY;
 
 enum class HLREdgeType
 {
@@ -75,4 +77,33 @@ private:
     void findSource(int iEdge, HLREdge& hlrEdge);
 
     Handle(HLRBRep_Algo) m_algo;
+};
+
+class PolyHLRExtractor
+{
+public:
+    PolyHLRExtractor(const Handle(HLRBRep_PolyAlgo) & algo);
+
+    std::vector<HLREdge> extract(HLREdgeType type, bool visible) const;
+    static TopoDS_Shape toCompound(const std::vector<HLREdge>& hlrEdges);
+
+private:
+    struct Segment
+    {
+        HLREdge hlrEdge;
+        bool visible = false;
+        bool reg1 = false;
+        bool regn = false;
+        bool outl = false;
+        bool intl = false;
+    };
+
+    void update();
+
+    void extractSegment(Segment segment, bool visible, const gp_XY& start, const gp_XY& finish);
+
+    static void findSource(const TopoDS_Shape& original, HLREdge& hlrEdge);
+
+    Handle(HLRBRep_PolyAlgo) m_algo;
+    std::vector<Segment> m_segments;
 };

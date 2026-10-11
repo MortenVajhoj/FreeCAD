@@ -37,6 +37,7 @@
 #include <App/PropertyLinks.h>
 #include <App/PropertyStandard.h>
 #include <Base/BoundBox.h>
+#include <Mod/Part/App/TopoShape.h>
 #include <Mod/TechDraw/TechDrawGlobal.h>
 
 #include "CosmeticExtension.h"
@@ -150,6 +151,15 @@ public:
     App::PropertyStringList SavedVertexMappedNames;
     App::PropertyIntegerList SavedVertexSegmentNumbers;
 
+    App::PropertyIntegerList SavedFaceIndices;
+    App::PropertyStringList SavedFaceMappedNames;
+    App::PropertyIntegerList SavedFaceSegmentNumbers;
+
+    App::PropertyStringList SavedCosmeticEdgeTags;
+    App::PropertyIntegerList SavedCosmeticEdgeIndices;
+    App::PropertyStringList SavedCosmeticVertexTags;
+    App::PropertyIntegerList SavedCosmeticVertexIndices;
+
     short mustExecute() const override;
     App::DocumentObjectExecReturn* execute() override;
     const char* getViewProviderName() const override { return "TechDrawGui::ViewProviderViewPart"; }
@@ -185,6 +195,8 @@ public:
     TechDraw::VertexPtr getProjVertexByIndex(int idx) const;
     // get existing geom for vertex by unique tag
     TechDraw::VertexPtr getProjVertexByCosTag(std::string cosTag);
+    //get existing geom for face idx in projection
+    TechDraw::FacePtr getFaceByIndex(int idx) const;
     //get edges for face idx in projection
     std::vector<TechDraw::BaseGeomPtr> getFaceEdgesByIndex(int idx) const;
     // get the wires that define face idx
@@ -293,6 +305,8 @@ protected:
 
     void setEdgeIndices();
     void setVertexIndices();
+    void setFaceIndices();
+    void addFaceEdgeNames(const std::vector<TechDraw::BaseGeomPtr>& goEdges);
     bool matchElements(const Part::TopoShape& partShape,
                                     const std::string& newMappedName, int newSegmentNumber,
                                     const std::string& oldMappedName, int oldSegmentNumber);
@@ -301,7 +315,7 @@ protected:
 
     bool m_handleFaces;
 
-    TopoDS_Shape m_saveShape;     //TODO: make this a Property.  Part::TopoShapeProperty??
+    Part::TopoShape m_saveShape;  //TODO: make this a Property.  Part::TopoShapeProperty??
     Base::Vector3d m_saveCentroid;//centroid before centering shape in origin
 
     std::vector<TechDraw::VertexPtr> m_referenceVerts;

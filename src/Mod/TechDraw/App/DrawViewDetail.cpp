@@ -262,7 +262,7 @@ void DrawViewDetail::makeDetailShape(const Part::TopoShape& shape3d, DrawViewPar
 
     //make a copy of the input shape so we don't inadvertently change it
     Part::TopoShape copyShape = shape3d.makeElementCopy();
-    m_saveShape = copyShape.getShape();
+    m_saveShape = copyShape;
     m_saveDvp = dvp;
     m_saveDvs = dvs;
 

@@ -387,6 +387,14 @@ class TechDrawExport Face
         FaceRepresentation getRepresentation() { return representation; }
         void setRepresentation(FaceRepresentation representation) { this->representation = representation; }
 
+        // a face is named by the mapped names of the projected edges around it
+        std::vector<std::string> getMappedNames() const { return m_mappedNames; }
+        void setMappedNames(std::string name) { m_mappedNames.push_back(name); }
+        std::vector<int> getSegmentNumbers() const { return m_segmentNumbers; }
+        void setSegmentNumbers(int index) { m_segmentNumbers.push_back(index); }
+        int getGeometryIndex() const { return m_geometryIndex; }
+        void setGeometryIndex(int index) { m_geometryIndex = index; }
+
         TopoDS_Face toOccFace() const;
         std::vector<Wire *> wires;
 
@@ -395,6 +403,9 @@ class TechDrawExport Face
 
     protected:
         FaceRepresentation representation;
+        std::vector<std::string> m_mappedNames;
+        std::vector<int> m_segmentNumbers;
+        int m_geometryIndex = -1;
 };
 using FacePtr = std::shared_ptr<Face>;
 

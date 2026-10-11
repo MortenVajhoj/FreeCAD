@@ -167,29 +167,13 @@ int CosmeticExtension::getCVIndex(const std::string& tag)
 {
     //    Base::Console().message("CE::getCVIndex({})\n", tag);
     std::vector<TechDraw::VertexPtr> gVerts = getOwner()->getVertexGeometry();
-    std::vector<TechDraw::CosmeticVertex*> cVerts = CosmeticVertexes.getValues();
 
-    int i = 0;
     for (auto& gv : gVerts) {
         if (gv->getCosmeticTag() == tag) {
-            return i;
+            return gv->getGeometryIndex();
         }
-        i++;
     }
 
-    // Nothing found
-    int base = gVerts.size();
-    i = 0;
-    for (auto& cv : cVerts) {
-        //        Base::Console().message("CE::getCVIndex - cv tag: {}\n",
-        //                                cv->getTagAsString().c_str());
-        if (cv->getTagAsString() == tag) {
-            return base + i;
-        }
-        i++;
-    }
-
-    //    Base::Console().message("CE::getCVIndex - returns: {}\n", result);
     return -1;
 }
 

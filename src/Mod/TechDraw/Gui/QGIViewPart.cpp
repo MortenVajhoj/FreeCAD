@@ -330,8 +330,8 @@ void QGIViewPart::drawAllFaces(void)
     std::vector<TechDraw::DrawHatch*> regularHatches = dvp->getHatches();
     std::vector<TechDraw::DrawGeomHatch*> geomHatches = dvp->getGeomHatches();
     const std::vector<TechDraw::FacePtr>& faceGeoms = dvp->getFaceGeometry();
-    int iFace(0);
     for (auto& face : faceGeoms) {
+        int iFace = face->getGeometryIndex();
         QGIFace* newFace = drawFace(face, iFace);
         if (face->getRepresentation() == FaceRepresentation::Hollow
             || face->getRepresentation() == FaceRepresentation::Sliced) {
@@ -401,7 +401,6 @@ void QGIViewPart::drawAllFaces(void)
         newFace->setZValue(ZVALUE::FACE);
         newFace->setPrettyNormal();
         newFace->draw();
-        iFace++;
     }
 }
 

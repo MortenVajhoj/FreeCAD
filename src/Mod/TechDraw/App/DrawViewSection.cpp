@@ -433,7 +433,7 @@ App::DocumentObjectExecReturn* DrawViewSection::execute()
 
     // save important info for later use
     m_shapeSize = sqrt(centerBox.SquareExtent());
-    m_saveShape = baseShape.getShape();
+    m_saveShape = baseShape;
 
     bool haveX = checkXDirection();
     if (!haveX) {
@@ -506,7 +506,7 @@ void DrawViewSection::makeSectionCut(const Part::TopoShape& baseShape)
 
     // We need to copy the shape to not modify the BRepstructure
     Part::TopoShape myShape = baseShape.makeElementCopy();
-    m_saveShape = myShape.getShape();// save shape for 2nd pass
+    m_saveShape = myShape;// save shape for 2nd pass
 
     if (debugSection()) {
         BRepTools::Write(myShape.getShape(), "DVSCopy.brep");// debug
@@ -577,7 +577,7 @@ Part::TopoShape DrawViewSection::prepareShape(const Part::TopoShape& uncenteredC
         inputCenter = ShapeUtils::findCentroid(uncenteredCutShape.getShape(), m_projectionCS);
         Base::Vector3d centroid(inputCenter.X(), inputCenter.Y(), inputCenter.Z());
 
-        m_cutShapeRaw = uncenteredCutShape.getShape();
+        m_cutShapeRaw = uncenteredCutShape;
         // move the cut shape to the origin.  Note this is slightly different than the move to
         // origin in regular views. Here we move by the SectionOrigin instead of by the geo center
         // (shape centroid).

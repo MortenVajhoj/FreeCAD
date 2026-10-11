@@ -1809,7 +1809,6 @@ std::vector<FacePtr> GeometryUtils::findHolesInFace(const DrawViewPart* dvp, con
     }
 
     std::vector<FacePtr> holes;
-    auto bigCheeseIndex = DU::getIndexFromName(bigCheeseSubRef);
 
     // v0.0 brute force
     auto facesAll = dvp->getFaceGeometry();
@@ -1817,26 +1816,23 @@ std::vector<FacePtr> GeometryUtils::findHolesInFace(const DrawViewPart* dvp, con
         // tarfu
         throw Base::RuntimeError("GU::findHolesInFace - no holes to find!!");
     }
-    
-    if (facesAll.at(bigCheeseIndex)->wires.empty()) {
+
+    FacePtr bigCheese = dvp->getFace(bigCheeseSubRef);
+    if (!bigCheese || bigCheese->wires.empty()) {
         return {};
     }
-    TopoDS_Wire bigCheeseWire = facesAll.at(bigCheeseIndex)->wires.front()->toOccWire();
+    TopoDS_Wire bigCheeseWire = bigCheese->wires.front()->toOccWire();
 
-    int iFace{0};
     for (auto& face : facesAll) {
-        if (iFace == bigCheeseIndex) {
-            iFace++;
+        if (face == bigCheese) {
             continue;
         }
         TopoDS_Wire faceWire = face->wires.front()->toOccWire();
         if (!Part::FaceMakerCheese::isInside(bigCheeseWire, faceWire)) {
-            iFace++;
             continue;
         }
 
         holes.push_back(face);
-        iFace++;
     }
 
     return removeNestedHoles(holes);

@@ -71,8 +71,7 @@ TaskCenterLine::TaskCenterLine(TechDraw::DrawViewPart* partFeat,
     ui->setupUi(this);
 
     m_geomIndex = DrawUtil::getIndexFromName(m_edgeName);
-    const TechDraw::BaseGeomPtrVector &geoms = partFeat->getEdgeGeometry();
-    BaseGeomPtr bg = geoms.at(m_geomIndex);
+    BaseGeomPtr bg = partFeat->getGeomByIndex(m_geomIndex);
     std::string tag = bg->getCosmeticTag();
     m_cl = partFeat->getCenterLine(tag);
     //existence of m_cl is checked in CommandAnnotate

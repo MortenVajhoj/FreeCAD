@@ -334,10 +334,12 @@ void execMidpoints(Gui::Command* cmd)
 
     cmd->openCommand(QT_TRANSLATE_NOOP("Command", "Add midpoint vertices"));
 
-    const TechDraw::BaseGeomPtrVector edges = dvp->getEdgeGeometry();
     for (auto& s: selectedEdges) {
         int GeoId(TechDraw::DrawUtil::getIndexFromName(s));
-        TechDraw::BaseGeomPtr geom = edges.at(GeoId);
+        TechDraw::BaseGeomPtr geom = dvp->getGeomByIndex(GeoId);
+        if (!geom) {
+            continue;
+        }
         Base::Vector3d mid = geom->getMidPoint();
         // invert the point so the math works correctly
         mid = DrawUtil::invertY(mid);
@@ -361,10 +363,12 @@ void execQuadrants(Gui::Command* cmd)
 
     cmd->openCommand(QT_TRANSLATE_NOOP("Command", "Add Quadrant vertices"));
 
-    const TechDraw::BaseGeomPtrVector edges = dvp->getEdgeGeometry();
     for (auto& s: selectedEdges) {
         int GeoId(TechDraw::DrawUtil::getIndexFromName(s));
-        TechDraw::BaseGeomPtr geom = edges.at(GeoId);
+        TechDraw::BaseGeomPtr geom = dvp->getGeomByIndex(GeoId);
+        if (!geom) {
+            continue;
+        }
         std::vector<Base::Vector3d> quads = geom->getQuads();
         for (auto& q: quads) {
             // invert the point so the math works correctly

@@ -289,6 +289,9 @@ std::vector<LineSet> DrawGeomHatch::getTrimmedLines(DrawViewPart* source, std::v
                                                     Base::Vector3d hatchOffset)
 {
     TopoDS_Face face = extractFace(source, iface);
+    if (face.IsNull()) {
+        return {};
+    }
     return getTrimmedLines(
         source,
         lineSets,
@@ -539,6 +542,10 @@ std::vector<LineSet> DrawGeomHatch::getFaceOverlay(int iFace)
 TopoDS_Face DrawGeomHatch::extractFace(DrawViewPart* source, int iface )
 {
     std::vector<TopoDS_Wire> faceWires = source->getWireForFace(iface);
+    if (faceWires.empty()) {
+        // there is no face with this index in the view
+        return TopoDS_Face();
+    }
 
     //build face(s) from geometry
     gp_Pnt gOrg(0.0, 0.0, 0.0);
